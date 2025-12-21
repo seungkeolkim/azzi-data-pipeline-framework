@@ -3,6 +3,7 @@
 #include "stream_pipeline/concurrency/bounded_pointer_queue.hpp"
 #include "stream_pipeline/metadata/frame_metadata_store_interface.hpp"
 #include "stream_pipeline/metadata/object_metadata_store_interface.hpp"
+#include "stream_pipeline/memory/frame_buffer_store_interface.hpp"
 #include "stream_pipeline/runtime/node_interface.hpp"
 
 #include <atomic>

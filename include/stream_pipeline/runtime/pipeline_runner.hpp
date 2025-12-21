@@ -3,6 +3,7 @@
 #include "stream_pipeline/concurrency/bounded_pointer_queue.hpp"
 #include "stream_pipeline/metadata/channel_state.hpp"
 #include "stream_pipeline/metadata/global_state.hpp"
+#include "stream_pipeline/metadata/frame_metadata.hpp"
 #include "stream_pipeline/runtime/node_interface.hpp"
 
 #include <memory>

@@ -1,0 +1,1 @@
+docker build -t stream-pipeline-dev -f docker/Dockerfile .
