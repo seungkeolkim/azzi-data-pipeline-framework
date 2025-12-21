@@ -1,0 +1,84 @@
+src/
+  sp/
+    core/
+      sp_types.hpp          # 공용 타입/enum/에러코드
+      sp_time.hpp           # timestamp 정의 (Wall/Mono)
+      sp_queue.hpp          # bounded pointer queue (drop-old 정책)
+      sp_intrusive_list.hpp # (선택) ObjectMeta 리스트용
+    meta/
+      sp_meta.hpp           # GlobalMeta/ChannelMeta/FrameMeta/ObjectMeta
+      sp_meta_store.hpp     # MetaStore(풀/라이프사이클) 인터페이스
+    buffer/
+      sp_buffer.hpp         # FrameBufferHandle(Host/Device 추상화)
+      sp_buffer_store.hpp   # BufferStore 인터페이스
+    runtime/
+      sp_node.hpp           # Node 인터페이스(스레드/루프 계약)
+      sp_pipeline.hpp       # Pipeline wiring(노드 연결, stop/shutdown)
+
+
+1차 피드백!!!
+
+약자들은 최대한 쓰지 말 것!!!!!!!!
+    -> cv 등 stdc++에 만든것 혹은 "I"nterface, "T"ype 같은건 그렇다 치지만 직접 만드는 "개념" 적인 것은 약자를 함부로 쓰면 안됨.
+    -> 당장 남이 아닌 한 달 뒤의 내가 다시 보더라도 유지보수 힘듦. 한 달 뒤의 나는 철저한 남이다!
+
+sp_types.hpp
+    Status
+        -> Queue의 Status인건 알겠지만 어떤 Status인지 명시 필요함
+        -> Status를 공용으로 만들어놓고 share해서 쓰면 위험함
+        -> 사용하는 곳 마다 특화된 Status가 필요할 수 있고, 따라서 현재 동일한 값 종류들을 가지더라도 분리 필요
+        -> 그리고 어떤 Status인지 명시하기. class 내부 type 혹은 namespace로 분리하더라도 이름이 헷갈려질 수 있음
+        -> 이 것은 동일 변수들을 사용해 오버라이딩을 쉽게 하는 등의 글로벌 개발 컨벤션상 어긋날 수 있지만 내가 불편함
+        -> 반박이나 추가 제안이 있으면 할 것. 충분히 검토 후 수용 결정하겠음
+    Result 마찬가지임
+
+
+sp_time.hpp
+    UnixNs -> Unix Nano Seconds인거지? 길게 풀어쓰는것은 어떨까
+
+sp_buffer.hpp
+    IBufferStore -> I 가 뭔데? Interface?
+    Result acquire(FrameBufferHandle& out, int32_t w, int32_t h, PixelFormat fmt) = 0;
+        -> width, height가 고정이면 좋지 않을까? fixed size로 미리 만들어들 수 있음.
+        -> 이미지는 2차원이지만 실제 cuda 메모리에서 이미지 보관은 linear한가? 혹은 overhead 거의 없이 serialize 가능?
+        -> 그렇다면 memory management (malloc 같은)를 직접 만들어 일정 사이즈를 할당해두고 빠서 주면 좋을것 같음
+        -> safe zone, red zone 관리 필요, debug print & error msg 용이하계 설계
+        -> 단, memory allocator를 만드는것만 해도 할당 정책 결정기 등 만들게 많아지니까 일단은 pool인 척 하는 그때그때 동적 할당도 좋음
+
+sp_meta.hpp
+    FrameBufferHandle buffer{};
+        -> 동적 assign 혹은 pointer를 통한 ref(FrameBufferHandle *)가 아니네? 그럼 lifecycle 관리를 store에서 할 수 있음?
+        -> = 연산자를 쓰면 copy 되는 것이 아닌지?
+    std::vector<ObjectMeta> objects;
+        -> frame meta에서만 관리되면 안됨. 잠시 occlusion이 일어나서 안 보이는 object가 생길 수 있고, 재사용 하거나 life cycle을 관리할 필요 있을 수 있음
+        -> nvdstracker의 shadow age, probation age 등 life cycle 관리 확인해봐
+    
+    std::atomic<int32_t> refcnt{1};
+        -> 언제 어떻게 쓰일지 필요해 보이지만 정확히 예제가 떠오르진 않음. garbage collection때 무튼 활용될 것
+        -> malloc 같은걸 만든다 치면 쓰일거임
+
+sp_meta_store.hpp
+    meta buffer pool 유지 & malloc 같은걸 직접 만들어서 관리가 필요할 것
+    다만 sp_meta.hpp 관련된 사항들이 fix되기 전까진 크게 이견 없음
+    mvp때는 이정도로도 괜찮을 것 같다.
+    또한 mvp 이후에는 내부 구현이 달라져야지 이러한 인터페이스 자체가 바뀌진 않을 것
+
+sp_meta_store.hpp
+    IMetaStore -> IBufferStore와 마찬가지로 I의 의미는?
+    TPtr -> T는 Type의 약자인가?
+    뭐든 넣을 수 있게 template으로 BoundedPtrQueue를 만든건 좋다고 봄
+
+    capacity_, q_, mu_ 등 -> private은 대개 _ 를 앞에 붙이지 않나? 몰라서 물어보는거야.
+
+
+2차 피드백 !!!!!!!!!!!!!!!!!!!!!!!!!!
+
+include/stream_pipeline/metadata/object_store_interface.hpp
+    ObjectHandle handle{0};
+        -> 변수명도 object_handle 과 같이 바로 알 수 있도록 해줘. 변수들을 사용할 때 항상 F12를 눌러야만 type을 알 수 있지 않도록
+        -> 이 파일 말고도 있는지 확인해주고 관련 코드들을 전부 다 새로 줘
+
+    object_store_interface.hpp
+        -> 통일성을 위해 object_metatdata_store_interface.hpp 로 바꾸고 class명도 ObjectMetadataStoreInterface로 바꿨어
+    
+

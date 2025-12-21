@@ -1,0 +1,23 @@
+@startuml
+title Stage 0 - Thread 1 (DecodeNode) Components
+
+package "Stage 0" {
+  [DecodeNode\n(Thread 1)] as DecodeNode
+  [FrameMetadataStoreInterface] as FrameMetadataStore
+  [FrameBufferStoreInterface] as FrameBufferStore
+  [BoundedPointerQueue<FrameMetadata*>] as FrameQueue
+  [InputSource\n(RTSP Decoder or Stub)] as InputSource
+}
+
+DecodeNode --> InputSource : read/decode frame
+DecodeNode --> FrameMetadataStore : acquire/release FrameMetadata*
+DecodeNode --> FrameBufferStore : acquire/view/release FrameBufferHandle
+DecodeNode --> FrameQueue : push(FrameMetadata*)
+
+note bottom of FrameQueue
+Overflow policy (Stage 0):
+DropOldestItem
+Queue carries pointers only
+end note
+
+@enduml

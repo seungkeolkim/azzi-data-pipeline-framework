@@ -39,3 +39,20 @@
 
 # debug information files
 *.dwo
+
+# Build directories
+/build/
+/out/
+compile_commands.json
+**/compile_commands.json
+*.swp
+*.swo
+
+# vscode
+.vscode/
+.history/
+.idea/
+
+# clangd caches
+.cache/
+.clangd/

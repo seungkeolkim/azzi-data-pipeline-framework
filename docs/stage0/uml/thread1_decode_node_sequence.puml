@@ -1,0 +1,49 @@
+@startuml
+title Stage 0 - Thread 1 (DecodeNode) Sequence
+
+actor "InputSource\n(RTSP or Stub)" as InputSource
+participant "DecodeNode\n(Thread 1)" as DecodeNode
+participant "FrameMetadataStoreInterface" as FrameMetadataStore
+participant "FrameBufferStoreInterface" as FrameBufferStore
+participant "BoundedPointerQueue<FrameMetadata*>\n(frame_metadata_queue)" as FrameQueue
+
+== Acquire metadata ==
+DecodeNode -> FrameMetadataStore : acquire(channel_identifier)
+FrameMetadataStore --> DecodeNode : frame_metadata_pointer
+
+== Acquire buffer ==
+DecodeNode -> FrameBufferStore : acquire(frame_buffer_description)
+FrameBufferStore --> DecodeNode : frame_buffer_handle
+
+== View buffer + Fill ==
+DecodeNode -> FrameBufferStore : view(frame_buffer_handle, out_view)
+FrameBufferStore --> DecodeNode : out_view(data_pointer,...)
+
+DecodeNode -> InputSource : read/decode next frame
+InputSource --> DecodeNode : decoded pixels (or stub)
+
+note right of DecodeNode
+TODO:
+Ideally record receive timestamp
+when frame is received (before decode),
+but Stage 0 keeps it simple.
+end note
+
+DecodeNode -> DecodeNode : fill out_view.data_pointer
+DecodeNode -> DecodeNode : set FrameMetadata fields\n(ids, timestamps, handles)\nclear object_handles, dropped=false
+
+== Push to queue ==
+DecodeNode -> FrameQueue : push(frame_metadata_pointer)
+FrameQueue --> DecodeNode : push_outcome(result, dropped_old_pointer?)
+
+alt DropOldestItem caused a drop
+    DecodeNode -> DecodeNode : mark dropped_old_pointer(optional)\n(dropped=true, drop_reason=...)
+    DecodeNode -> FrameBufferStore : release(dropped_old_pointer.frame_buffer_handle)
+    DecodeNode -> FrameMetadataStore : release(dropped_old_pointer)
+else No drop
+    note right of DecodeNode
+    Frame enqueued successfully.
+    end note
+end
+
+@enduml

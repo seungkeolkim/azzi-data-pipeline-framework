@@ -1,0 +1,9 @@
+services:
+  stream-pipeline-dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ..:/workspace
+    working_dir: /workspace
+    command: bash -lc "sleep infinity"

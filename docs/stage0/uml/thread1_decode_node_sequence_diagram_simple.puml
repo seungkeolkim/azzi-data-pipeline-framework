@@ -1,0 +1,33 @@
+@startuml
+title Stage 0 - Thread 1 (DecodeNode) Sequence
+
+actor InputSource
+participant DecodeNode
+participant FrameMetadataStore
+participant FrameBufferStore
+participant FrameQueue
+
+DecodeNode -> FrameMetadataStore : acquire()
+FrameMetadataStore --> DecodeNode : FrameMetadata*
+
+DecodeNode -> FrameBufferStore : acquire()
+FrameBufferStore --> DecodeNode : FrameBufferHandle
+
+DecodeNode -> FrameBufferStore : view(handle)
+FrameBufferStore --> DecodeNode : FrameBufferView
+
+DecodeNode -> InputSource : read/decode frame
+InputSource --> DecodeNode : pixels
+
+DecodeNode -> DecodeNode : fill buffer
+DecodeNode -> DecodeNode : set metadata fields
+
+DecodeNode -> FrameQueue : push(FrameMetadata*)
+FrameQueue --> DecodeNode : PushOutcome
+
+alt DropOldest
+    DecodeNode -> FrameBufferStore : release(dropped.frame_buffer_handle)
+    DecodeNode -> FrameMetadataStore : release(dropped)
+end
+
+@enduml
