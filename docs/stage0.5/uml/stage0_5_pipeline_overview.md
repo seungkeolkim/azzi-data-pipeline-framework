@@ -1,3 +1,4 @@
+```mermaid
 %% Stage 0.5 pipeline overview (mermaid)
 flowchart LR
     subgraph Stage0_5[Stage 0.5 Observability]
@@ -29,3 +30,4 @@ flowchart LR
     classDef node fill:#e0f7ff,stroke:#0077aa,stroke-width:1px;
     class DecodeNode,DetectionNode,OutputNode node;
     class FrameMetadataStore,FrameBufferStore,ObjectStore,FrameQueue,MetaStore,NodeStore store;
+```
