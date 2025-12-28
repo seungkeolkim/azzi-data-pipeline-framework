@@ -8,70 +8,55 @@
 #include "utils/bounded_pointer_queue.h"
 #include "utils/logger.h"
 
-// DummyDecodeNode generates synthetic frames and enqueues FrameHandles.
+// Stage 0.5에서 입력 소스 분리는 보류하고, 단순한 더미 디코드 노드만 만든다.
 class DummyDecodeNode {
- public:
-  DummyDecodeNode(uint64_t channel_id, FrameStore& frame_store, ChannelState& channel_state,
-                  NodeRuntimeStateStore& node_state_store,
-                  BoundedPointerQueue<FrameStore::FrameHandle>& output_queue,
-                  std::string instance_id)
-      : channel_id_(channel_id),
-        frame_store_(frame_store),
-        channel_state_(channel_state),
-        node_state_(node_state_store.GetOrCreate(instance_id)),
-        output_queue_(output_queue),
-        instance_id_(std::move(instance_id)) {}
+public:
+    DummyDecodeNode(const std::string& instance_id,
+                    FrameStore& frame_store,
+                    BoundedPointerQueue<FrameHandle>& output_queue,
+                    NodeRuntimeStateStore& node_store,
+                    ChannelIdentifier channel)
+        : instance_id_(instance_id),
+          frame_store_(frame_store),
+          output_queue_(output_queue),
+          counters_(node_store.Get(instance_id)),
+          channel_(std::move(channel)) {}
 
-  void Start() { Logger::Instance().Log(Logger::Level::kInfo, instance_id_, "Start decode node"); }
-  void Stop() { Logger::Instance().Log(Logger::Level::kInfo, instance_id_, "Stop decode node"); }
-
-  void ProduceFrame(uint64_t frame_number) {
-    node_state_.in_count.fetch_add(1);
-    FrameMetadata metadata;
-    metadata.frame_id = frame_number;
-    metadata.channel_id = channel_id_;
-    metadata.wall_clock_ns = NowWallClock();
-    metadata.monotonic_clock_ns = NowMonotonic();
-
-    const auto handle = frame_store_.AddFrame(metadata);
-    auto buffer_handle = frame_store_.AddBuffer(handle, std::make_unique<FrameBuffer>("synthetic"));
-    (void)buffer_handle;  // buffer retrieval occurs in downstream nodes.
-
-    const auto dropped = output_queue_.Push(handle);
-    channel_state_.decoded_frames.fetch_add(1);
-    node_state_.out_count.fetch_add(1);
-
-    if (dropped.has_value()) {
-      channel_state_.dropped_frames.fetch_add(1);
-      node_state_.drop_count.fetch_add(1);
-      Logger::Instance().Log(Logger::Level::kWarn, instance_id_,
-                             "DropOldest during enqueue, frame_handle=" +
-                                 std::to_string(dropped.value()));
-      const auto dropped_buffer = frame_store_.GetBufferForFrame(dropped.value());
-      if (dropped_buffer.has_value()) {
-        frame_store_.ReleaseBuffer(dropped_buffer.value());
-      }
-      frame_store_.ReleaseFrame(dropped.value());
+    void Run(uint64_t frame_count) {
+        LOG_INFO("DummyDecodeNode 시작");
+        for (uint64_t i = 0; i < frame_count; ++i) {
+            ProduceFrame(i);
+        }
+        LOG_INFO("DummyDecodeNode 종료");
     }
-  }
 
- private:
-  uint64_t NowWallClock() const {
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(
-               std::chrono::system_clock::now().time_since_epoch())
-        .count();
-  }
+private:
+    void ProduceFrame(uint64_t index) {
+        const auto now = std::chrono::steady_clock::now();
+        const int64_t monotonic_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+        const int64_t wall_ns = monotonic_ns;  // 데모 목적: 동일 값 사용.
 
-  uint64_t NowMonotonic() const {
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(
-               std::chrono::steady_clock::now().time_since_epoch())
-        .count();
-  }
+        FrameMetadata metadata{index, channel_, TimestampPair{wall_ns, monotonic_ns}};
+        FrameBuffer buffer{"dummy_frame_" + std::to_string(index)};
+        std::vector<ObjectMetadata> objects;  // 디코드 단계에서는 객체 없음.
 
-  uint64_t channel_id_;
-  FrameStore& frame_store_;
-  ChannelState& channel_state_;
-  NodeRuntimeState& node_state_;
-  BoundedPointerQueue<FrameStore::FrameHandle>& output_queue_;
-  std::string instance_id_;
+        FrameHandle handle = frame_store_.CreateFrame(metadata, buffer, objects);
+        counters_.in_count.fetch_add(1);
+
+        auto dropped = output_queue_.Push(handle);
+        if (dropped.has_value()) {
+            counters_.drop_count.fetch_add(1);
+            LOG_WARN("디코드 큐 포화로 프레임 drop: id=" + std::to_string(frame_store_.GetMetadata(*dropped).frame_id));
+            // DropOldest 반환된 핸들은 호출자에서 release chain을 마무리한다.
+            frame_store_.ReleaseFrame(*dropped);
+        }
+
+        counters_.out_count.fetch_add(1);
+    }
+
+    std::string instance_id_;
+    FrameStore& frame_store_;
+    BoundedPointerQueue<FrameHandle>& output_queue_;
+    NodeRuntimeCounters& counters_;
+    ChannelIdentifier channel_;
 };

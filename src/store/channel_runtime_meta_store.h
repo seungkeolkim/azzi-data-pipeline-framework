@@ -6,26 +6,23 @@
 
 #include "metadata/channel_runtime_meta.h"
 
-// Store for ChannelRuntimeMeta. The store owns the meta objects; callers access them via
-// read/write lambdas so the store can coordinate locking.
+// 채널 단위 글로벌 메타데이터 store. mutex 기반으로 단순 구현한다.
 class ChannelRuntimeMetaStore {
- public:
-  using ChannelIdentifier = uint64_t;
+public:
+    using ReadFn = std::function<void(const ChannelRuntimeMeta&)>;
+    using WriteFn = std::function<void(ChannelRuntimeMeta&)>;
 
-  void Read(ChannelIdentifier channel_id,
-            const std::function<void(const ChannelRuntimeMeta&)>& reader) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    ChannelRuntimeMeta& meta = meta_map_[channel_id];
-    reader(meta);
-  }
+    void Read(const ChannelIdentifier& id, const ReadFn& fn) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        fn(meta_map_[id]);
+    }
 
-  void Write(ChannelIdentifier channel_id, const std::function<void(ChannelRuntimeMeta&)>& writer) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    ChannelRuntimeMeta& meta = meta_map_[channel_id];
-    writer(meta);
-  }
+    void Write(const ChannelIdentifier& id, const WriteFn& fn) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        fn(meta_map_[id]);
+    }
 
- private:
-  std::mutex mutex_;
-  std::unordered_map<ChannelIdentifier, ChannelRuntimeMeta> meta_map_;
+private:
+    std::unordered_map<ChannelIdentifier, ChannelRuntimeMeta, ChannelIdentifierHash> meta_map_;
+    std::mutex mutex_;
 };

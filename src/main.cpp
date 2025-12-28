@@ -2,64 +2,45 @@
 #include <thread>
 
 #include "metadata/frame.h"
-#include "store/channel_runtime_meta_store.h"
-#include "store/node_runtime_state_store.h"
-#include "utils/bounded_pointer_queue.h"
-#include "utils/logger.h"
 #include "pipeline/nodes/dummy_decode_node.h"
 #include "pipeline/nodes/dummy_detection_node.h"
 #include "pipeline/nodes/output_node.h"
+#include "store/channel_runtime_meta_store.h"
+#include "store/node_runtime_state_store.h"
+#include "utils/logger.h"
 
 int main() {
-  FrameStore frame_store;
-  ChannelState channel_state;
-  ChannelRuntimeMetaStore channel_meta_store;
-  NodeRuntimeStateStore node_state_store;
+    LOG_INFO("Stage 0.5 데모 파이프라인 시작");
 
-  BoundedPointerQueue<FrameStore::FrameHandle> decode_to_detect_queue(/*capacity=*/3);
-  BoundedPointerQueue<FrameStore::BufferHandle> detect_to_output_queue(/*capacity=*/3);
+    FrameStore frame_store;
+    ChannelRuntimeMetaStore channel_meta_store;
+    NodeRuntimeStateStore node_state_store;
 
-  const uint64_t channel_id = 1;
-  DummyDecodeNode decode_node(channel_id, frame_store, channel_state, node_state_store,
-                              decode_to_detect_queue, "decode_node_1");
-  DummyDetectionNode detection_node(channel_id, frame_store, channel_meta_store, node_state_store,
-                                    decode_to_detect_queue, detect_to_output_queue,
-                                    "detection_node_1");
-  OutputNode output_node(channel_id, frame_store, channel_state, channel_meta_store,
-                         node_state_store, detect_to_output_queue, "output_node_1");
+    // 각 큐는 DropOldestItem 반환을 관찰하기 위해 작은 용량으로 둔다.
+    BoundedPointerQueue<FrameHandle> decode_to_detect_queue(5);
+    BoundedPointerQueue<FrameHandle> detect_to_output_queue(5);
 
-  decode_node.Start();
-  detection_node.Start();
-  output_node.Start();
+    ChannelIdentifier channel{"demo_stream"};
+    const int64_t ttl_ns = std::chrono::seconds(2).count();
 
-  const uint64_t kVehicleTtlNs =
-      std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::seconds(2)).count();
+    DummyDecodeNode decode_node("decode_0", frame_store, decode_to_detect_queue, node_state_store, channel);
+    DummyDetectionNode detection_node("detect_0", frame_store, decode_to_detect_queue, detect_to_output_queue,
+                                      channel_meta_store, node_state_store, ttl_ns);
+    OutputNode output_node("output_0", frame_store, detect_to_output_queue, channel_meta_store, node_state_store,
+                          ttl_ns);
 
-  for (uint64_t frame = 1; frame <= 6; ++frame) {
-    decode_node.ProduceFrame(frame);
-    // Simulate pipeline progression.
-    detection_node.ProcessNext();
-    output_node.ProcessNext(kVehicleTtlNs);
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-  }
+    decode_node.Run(12);
 
-  // Drain remaining items.
-  while (detection_node.ProcessNext()) {
-    output_node.ProcessNext(kVehicleTtlNs);
-  }
-  while (output_node.ProcessNext(kVehicleTtlNs)) {
-  }
+    // 디코드 → 감지 변환 루프.
+    while (decode_to_detect_queue.Size() > 0) {
+        detection_node.RunOnce();
+    }
 
-  decode_node.Stop();
-  detection_node.Stop();
-  output_node.Stop();
+    // 감지 → 출력 루프.
+    while (detect_to_output_queue.Size() > 0) {
+        output_node.RunOnce();
+    }
 
-  Logger::Instance().Log(Logger::Level::kInfo, "main", "Channel decoded=" +
-                                                         std::to_string(channel_state.decoded_frames.load()) +
-                                                         " dropped=" +
-                                                         std::to_string(channel_state.dropped_frames.load()) +
-                                                         " output=" +
-                                                         std::to_string(channel_state.output_frames.load()));
-
-  return 0;
+    LOG_INFO("Stage 0.5 데모 파이프라인 종료");
+    return 0;
 }

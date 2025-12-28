@@ -1,148 +1,87 @@
 #pragma once
 
-#include <atomic>
 #include <cstdint>
-#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
-#include "utils/logger.h"
+// Stage 0에서 이미 확립된 계약: Store가 유일 소유자가 되고, 노드는 핸들만 보유한다.
+// ChannelIdentifier는 stream/source를 나타내며 새 타입을 만들지 말라는 요구를 따른다.
+struct ChannelIdentifier {
+    std::string name;
 
-// FrameMetadata contains information about where and when a frame was generated.
+    bool operator==(const ChannelIdentifier& other) const { return name == other.name; }
+};
+
+struct ChannelIdentifierHash {
+    std::size_t operator()(const ChannelIdentifier& id) const noexcept {
+        return std::hash<std::string>{}(id.name);
+    }
+};
+
+// FrameMetadata는 wall/monotonic timestamp를 모두 유지하여 후속 stage의 지연 추적을 돕는다.
+struct TimestampPair {
+    int64_t wall_clock_ns;
+    int64_t monotonic_clock_ns;
+};
+
 struct FrameMetadata {
-  uint64_t frame_id{0};
-  uint64_t channel_id{0};
-
-  // Wall-clock and monotonic timestamps are both recorded to allow cross-node latency
-  // measurements while still providing monotonic ordering.
-  uint64_t wall_clock_ns{0};
-  uint64_t monotonic_clock_ns{0};
+    uint64_t frame_id;
+    ChannelIdentifier channel;
+    TimestampPair timestamps;
 };
 
-// FrameBuffer stores the raw bytes for a frame. In Stage 0.5 the buffer is synthetic.
+// 실제 payload는 dummy/synthetic이지만 buffer 소유권 역시 store에 둔다.
 struct FrameBuffer {
-  explicit FrameBuffer(std::string payload) : payload(std::move(payload)) {}
-  std::string payload;
+    std::string payload;
 };
 
-// ObjectMetadata represents detection output attached to a frame buffer. In Stage 0.5 this is
-// synthetic and uses a simple label.
+// 간단한 객체 메타데이터. Stage 0.5에서는 타입만 구분한다.
 struct ObjectMetadata {
-  uint64_t object_id{0};
-  uint64_t frame_id{0};
-  std::string label;
+    std::string object_type;
 };
 
-// ChannelState holds per-channel atomic counters that were already available in Stage 0.
-struct ChannelState {
-  std::atomic<uint64_t> decoded_frames{0};
-  std::atomic<uint64_t> dropped_frames{0};
-  std::atomic<uint64_t> output_frames{0};
+// FrameHandle은 store 내부 인덱스를 가리키는 비소유 핸들이다.
+struct FrameHandle {
+    size_t storage_index;
 };
 
-// Store contracts: the store owns the underlying objects; nodes only keep handles.
-// Handles are represented as integer IDs to keep ownership clear.
-
+// FrameStore는 frame → buffer → object release 체인을 유지하도록 설계한다.
 class FrameStore {
- public:
-  using FrameHandle = uint64_t;
-  using BufferHandle = uint64_t;
-  using ObjectHandle = uint64_t;
-
-  FrameHandle AddFrame(FrameMetadata metadata) {
-    const FrameHandle handle = next_frame_handle_++;
-    frames_.emplace(handle, std::move(metadata));
-    return handle;
-  }
-
-  BufferHandle AddBuffer(FrameHandle frame_handle, std::unique_ptr<FrameBuffer> buffer) {
-    const BufferHandle handle = next_buffer_handle_++;
-    buffers_.emplace(handle, std::move(buffer));
-    frame_to_buffer_[frame_handle] = handle;
-    buffer_to_frame_[handle] = frame_handle;
-    return handle;
-  }
-
-  ObjectHandle AddObject(BufferHandle buffer_handle, std::unique_ptr<ObjectMetadata> object) {
-    const ObjectHandle handle = next_object_handle_++;
-    objects_.emplace(handle, std::move(object));
-    buffer_to_object_[buffer_handle] = handle;
-    return handle;
-  }
-
-  FrameMetadata* GetFrame(FrameHandle handle) {
-    const auto iter = frames_.find(handle);
-    return iter == frames_.end() ? nullptr : &iter->second;
-  }
-
-  FrameBuffer* GetBuffer(BufferHandle handle) {
-    const auto iter = buffers_.find(handle);
-    return iter == buffers_.end() ? nullptr : iter->second.get();
-  }
-
-  ObjectMetadata* GetObject(ObjectHandle handle) {
-    const auto iter = objects_.find(handle);
-    return iter == objects_.end() ? nullptr : iter->second.get();
-  }
-
-  // Release chain respects Stage 0: object -> buffer -> frame.
-  void ReleaseObject(ObjectHandle handle) {
-    objects_.erase(handle);
-  }
-
-  void ReleaseBuffer(BufferHandle handle) {
-    buffer_to_object_.erase(handle);
-    buffer_to_frame_.erase(handle);
-    buffers_.erase(handle);
-  }
-
-  void ReleaseFrame(FrameHandle handle) {
-    const auto buffer_iter = frame_to_buffer_.find(handle);
-    if (buffer_iter != frame_to_buffer_.end()) {
-      frame_to_buffer_.erase(buffer_iter);
+public:
+    FrameHandle CreateFrame(const FrameMetadata& metadata,
+                            const FrameBuffer& buffer,
+                            const std::vector<ObjectMetadata>& objects) {
+        storage_.push_back(FrameStorage{metadata, buffer, objects});
+        return FrameHandle{storage_.size() - 1};
     }
-    frames_.erase(handle);
-  }
 
-  std::optional<BufferHandle> GetBufferForFrame(FrameHandle frame_handle) {
-    const auto iter = frame_to_buffer_.find(frame_handle);
-    if (iter == frame_to_buffer_.end()) {
-      return std::nullopt;
+    const FrameMetadata& GetMetadata(const FrameHandle& handle) const { return storage_.at(handle.storage_index).metadata; }
+
+    const FrameBuffer& GetBuffer(const FrameHandle& handle) const { return storage_.at(handle.storage_index).buffer; }
+
+    const std::vector<ObjectMetadata>& GetObjects(const FrameHandle& handle) const {
+        return storage_.at(handle.storage_index).objects;
     }
-    return iter->second;
-  }
 
-  std::optional<ObjectHandle> GetObjectForBuffer(BufferHandle buffer_handle) {
-    const auto iter = buffer_to_object_.find(buffer_handle);
-    if (iter == buffer_to_object_.end()) {
-      return std::nullopt;
+    // release chain: 객체 → 버퍼 → 프레임 순서로 clear하여 정합성을 보장한다.
+    void ReleaseObjects(const FrameHandle& handle) { storage_.at(handle.storage_index).objects.clear(); }
+
+    void ReleaseBuffer(const FrameHandle& handle) { storage_.at(handle.storage_index).buffer.payload.clear(); }
+
+    void ReleaseFrame(const FrameHandle& handle) {
+        ReleaseObjects(handle);
+        ReleaseBuffer(handle);
+        storage_.at(handle.storage_index).metadata = FrameMetadata{};
     }
-    return iter->second;
-  }
 
-  const std::unordered_map<FrameHandle, BufferHandle>& GetBufferForFrameMap() const {
-    return frame_to_buffer_;
-  }
+private:
+    struct FrameStorage {
+        FrameMetadata metadata;
+        FrameBuffer buffer;
+        std::vector<ObjectMetadata> objects;
+    };
 
-  std::optional<FrameHandle> GetFrameForBuffer(BufferHandle buffer_handle) const {
-    const auto iter = buffer_to_frame_.find(buffer_handle);
-    if (iter == buffer_to_frame_.end()) {
-      return std::nullopt;
-    }
-    return iter->second;
-  }
-
- private:
-  FrameHandle next_frame_handle_{1};
-  BufferHandle next_buffer_handle_{1};
-  ObjectHandle next_object_handle_{1};
-
-  std::unordered_map<FrameHandle, FrameMetadata> frames_;
-  std::unordered_map<BufferHandle, std::unique_ptr<FrameBuffer>> buffers_;
-  std::unordered_map<ObjectHandle, std::unique_ptr<ObjectMetadata>> objects_;
-
-  std::unordered_map<FrameHandle, BufferHandle> frame_to_buffer_;
-  std::unordered_map<BufferHandle, FrameHandle> buffer_to_frame_;
-  std::unordered_map<BufferHandle, ObjectHandle> buffer_to_object_;
+    std::vector<FrameStorage> storage_;
 };

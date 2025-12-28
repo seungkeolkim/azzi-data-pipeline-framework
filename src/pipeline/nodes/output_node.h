@@ -1,85 +1,71 @@
 #pragma once
 
 #include <chrono>
-#include <optional>
 #include <string>
 
-#include "metadata/frame.h"
 #include "metadata/channel_runtime_meta.h"
+#include "metadata/frame.h"
 #include "store/channel_runtime_meta_store.h"
 #include "store/node_runtime_state_store.h"
 #include "utils/bounded_pointer_queue.h"
 #include "utils/logger.h"
 
-// OutputNode reads buffered detections, performs TTL-based checks, and releases resources.
+// Output 노드는 release chain을 마무리하고 TTL 기반 present 여부를 샘플링 로그로 남긴다.
 class OutputNode {
- public:
-  OutputNode(uint64_t channel_id, FrameStore& frame_store, ChannelState& channel_state,
-             ChannelRuntimeMetaStore& channel_meta_store,
-             NodeRuntimeStateStore& node_state_store,
-             BoundedPointerQueue<FrameStore::BufferHandle>& input_queue, std::string instance_id)
-      : channel_id_(channel_id),
-        frame_store_(frame_store),
-        channel_state_(channel_state),
-        channel_meta_store_(channel_meta_store),
-        node_state_(node_state_store.GetOrCreate(instance_id)),
-        input_queue_(input_queue),
-        instance_id_(std::move(instance_id)) {}
+public:
+    OutputNode(const std::string& instance_id,
+               FrameStore& frame_store,
+               BoundedPointerQueue<FrameHandle>& input_queue,
+               ChannelRuntimeMetaStore& meta_store,
+               NodeRuntimeStateStore& node_store,
+               int64_t presence_ttl_ns)
+        : instance_id_(instance_id),
+          frame_store_(frame_store),
+          input_queue_(input_queue),
+          meta_store_(meta_store),
+          counters_(node_store.Get(instance_id)),
+          presence_ttl_ns_(presence_ttl_ns) {}
 
-  void Start() { Logger::Instance().Log(Logger::Level::kInfo, instance_id_, "Start output node"); }
-  void Stop() { Logger::Instance().Log(Logger::Level::kInfo, instance_id_, "Stop output node"); }
+    void RunOnce() {
+        auto handle_opt = input_queue_.Pop();
+        if (!handle_opt.has_value()) {
+            return;
+        }
+        FrameHandle handle = *handle_opt;
+        counters_.in_count.fetch_add(1);
 
-  bool ProcessNext(uint64_t vehicle_ttl_ns) {
-    if (input_queue_.Empty()) {
-      return false;
+        const FrameMetadata& meta = frame_store_.GetMetadata(handle);
+        const int64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                   std::chrono::steady_clock::now().time_since_epoch())
+                                   .count();
+
+        bool vehicle_present = false;
+        bool person_present = false;
+        meta_store_.Read(meta.channel, [&](const ChannelRuntimeMeta& channel_meta) {
+            vehicle_present = channel_meta.IsVehiclePresent(now_ns, presence_ttl_ns_);
+            person_present = channel_meta.IsPersonPresent(now_ns, presence_ttl_ns_);
+        });
+
+        // 샘플링 로그: frame_id 3의 배수마다 출력.
+        if (meta.frame_id % 3 == 0) {
+            LOG_INFO("채널=" + meta.channel.name + " frame=" + std::to_string(meta.frame_id) +
+                     " vehicle_present=" + (vehicle_present ? "true" : "false") +
+                     " person_present=" + (person_present ? "true" : "false"));
+        }
+
+        // release chain 유지.
+        frame_store_.ReleaseObjects(handle);
+        frame_store_.ReleaseBuffer(handle);
+        frame_store_.ReleaseFrame(handle);
+
+        counters_.out_count.fetch_add(1);
     }
-    node_state_.in_count.fetch_add(1);
-    auto buffer_handle = input_queue_.Pop();
 
-    auto object_handle = frame_store_.GetObjectForBuffer(buffer_handle);
-    auto frame_handle = frame_store_.GetFrameForBuffer(buffer_handle);
-    if (!frame_handle.has_value()) {
-      node_state_.error_count.fetch_add(1);
-      Logger::Instance().Log(Logger::Level::kError, instance_id_, "Missing frame for buffer");
-      return false;
-    }
-
-    const auto now_monotonic = NowMonotonic();
-    bool vehicle_present = false;
-    channel_meta_store_.Read(channel_id_, [vehicle_ttl_ns, now_monotonic, &vehicle_present](
-                                               const ChannelRuntimeMeta& meta) {
-      vehicle_present = meta.IsVehiclePresent(now_monotonic, vehicle_ttl_ns);
-    });
-
-    Logger::Instance().Log(Logger::Level::kInfo, instance_id_,
-                           "Output frame=" + std::to_string(frame_handle.value()) +
-                               " vehicle_present=" + (vehicle_present ? "true" : "false"));
-
-    channel_state_.output_frames.fetch_add(1);
-    node_state_.out_count.fetch_add(1);
-
-    // Release chain: object -> buffer -> frame.
-    if (object_handle.has_value()) {
-      frame_store_.ReleaseObject(object_handle.value());
-    }
-    frame_store_.ReleaseBuffer(buffer_handle);
-    frame_store_.ReleaseFrame(frame_handle.value());
-
-    return true;
-  }
-
- private:
-  uint64_t NowMonotonic() const {
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(
-               std::chrono::steady_clock::now().time_since_epoch())
-        .count();
-  }
-
-  uint64_t channel_id_;
-  FrameStore& frame_store_;
-  ChannelState& channel_state_;
-  ChannelRuntimeMetaStore& channel_meta_store_;
-  NodeRuntimeState& node_state_;
-  BoundedPointerQueue<FrameStore::BufferHandle>& input_queue_;
-  std::string instance_id_;
+private:
+    std::string instance_id_;
+    FrameStore& frame_store_;
+    BoundedPointerQueue<FrameHandle>& input_queue_;
+    ChannelRuntimeMetaStore& meta_store_;
+    NodeRuntimeCounters& counters_;
+    int64_t presence_ttl_ns_;
 };

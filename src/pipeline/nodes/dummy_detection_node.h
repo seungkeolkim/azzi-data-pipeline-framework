@@ -1,87 +1,70 @@
 #pragma once
 
 #include <chrono>
-#include <optional>
 #include <string>
 
-#include "metadata/frame.h"
 #include "metadata/channel_runtime_meta.h"
+#include "metadata/frame.h"
 #include "store/channel_runtime_meta_store.h"
 #include "store/node_runtime_state_store.h"
 #include "utils/bounded_pointer_queue.h"
 #include "utils/logger.h"
 
-// DummyDetectionNode consumes frames, attaches synthetic objects, and writes channel runtime meta.
+// 더미 감지 노드: 프레임 id 패턴으로 차량/사람 존재를 판단해 메타 store에 기록한다.
 class DummyDetectionNode {
- public:
-  DummyDetectionNode(uint64_t channel_id, FrameStore& frame_store,
-                     ChannelRuntimeMetaStore& channel_meta_store,
-                     NodeRuntimeStateStore& node_state_store,
-                     BoundedPointerQueue<FrameStore::FrameHandle>& input_queue,
-                     BoundedPointerQueue<FrameStore::BufferHandle>& output_queue,
-                     std::string instance_id)
-      : channel_id_(channel_id),
-        frame_store_(frame_store),
-        channel_meta_store_(channel_meta_store),
-        node_state_(node_state_store.GetOrCreate(instance_id)),
-        input_queue_(input_queue),
-        output_queue_(output_queue),
-        instance_id_(std::move(instance_id)) {}
+public:
+    DummyDetectionNode(const std::string& instance_id,
+                       FrameStore& frame_store,
+                       BoundedPointerQueue<FrameHandle>& input_queue,
+                       BoundedPointerQueue<FrameHandle>& output_queue,
+                       ChannelRuntimeMetaStore& meta_store,
+                       NodeRuntimeStateStore& node_store,
+                       int64_t presence_ttl_ns)
+        : instance_id_(instance_id),
+          frame_store_(frame_store),
+          input_queue_(input_queue),
+          output_queue_(output_queue),
+          meta_store_(meta_store),
+          counters_(node_store.Get(instance_id)),
+          presence_ttl_ns_(presence_ttl_ns) {}
 
-  void Start() { Logger::Instance().Log(Logger::Level::kInfo, instance_id_, "Start detection node"); }
-  void Stop() { Logger::Instance().Log(Logger::Level::kInfo, instance_id_, "Stop detection node"); }
+    void RunOnce() {
+        auto handle_opt = input_queue_.Pop();
+        if (!handle_opt.has_value()) {
+            return;
+        }
+        FrameHandle handle = *handle_opt;
+        counters_.in_count.fetch_add(1);
 
-  bool ProcessNext() {
-    if (input_queue_.Empty()) {
-      return false;
-    }
-    node_state_.in_count.fetch_add(1);
-    auto frame_handle = input_queue_.Pop();
-    FrameMetadata* metadata = frame_store_.GetFrame(frame_handle);
-    if (metadata == nullptr) {
-      node_state_.error_count.fetch_add(1);
-      Logger::Instance().Log(Logger::Level::kError, instance_id_, "Missing frame metadata");
-      return false;
-    }
+        const FrameMetadata& meta = frame_store_.GetMetadata(handle);
+        const bool vehicle_detected = (meta.frame_id % 2 == 0);
+        const bool person_detected = (meta.frame_id % 5 == 0);
 
-    auto buffer_handle = frame_store_.GetBufferForFrame(frame_handle);
-    if (!buffer_handle.has_value()) {
-      node_state_.error_count.fetch_add(1);
-      Logger::Instance().Log(Logger::Level::kError, instance_id_, "Missing buffer for frame");
-      return false;
-    }
+        meta_store_.Write(meta.channel, [&](ChannelRuntimeMeta& channel_meta) {
+            if (vehicle_detected) {
+                channel_meta.last_seen_vehicle_monotonic_ns = meta.timestamps.monotonic_clock_ns;
+            }
+            if (person_detected) {
+                channel_meta.last_seen_person_monotonic_ns = meta.timestamps.monotonic_clock_ns;
+            }
+        });
 
-    // Synthetic detection: even frame ids carry vehicles, odd ones do not.
-    std::string label = (metadata->frame_id % 2 == 0) ? "vehicle" : "background";
-    frame_store_.AddObject(buffer_handle.value(),
-                           std::make_unique<ObjectMetadata>(ObjectMetadata{
-                               metadata->frame_id, metadata->frame_id, label}));
+        auto dropped = output_queue_.Push(handle);
+        if (dropped.has_value()) {
+            counters_.drop_count.fetch_add(1);
+            LOG_WARN("감지 큐 포화로 프레임 drop: id=" + std::to_string(frame_store_.GetMetadata(*dropped).frame_id));
+            frame_store_.ReleaseFrame(*dropped);
+        }
 
-    // Update runtime meta with last seen vehicle timestamp.
-    if (label == "vehicle") {
-      channel_meta_store_.Write(channel_id_, [this, metadata](ChannelRuntimeMeta& meta) {
-        meta.last_seen_vehicle_monotonic_ns = metadata->monotonic_clock_ns;
-      });
+        counters_.out_count.fetch_add(1);
     }
 
-    const auto dropped = output_queue_.Push(buffer_handle.value());
-    node_state_.out_count.fetch_add(1);
-    if (dropped.has_value()) {
-      node_state_.drop_count.fetch_add(1);
-      Logger::Instance().Log(Logger::Level::kWarn, instance_id_,
-                             "DropOldest at detection output, buffer_handle=" +
-                                 std::to_string(dropped.value()));
-      frame_store_.ReleaseBuffer(dropped.value());
-    }
-    return true;
-  }
-
- private:
-  uint64_t channel_id_;
-  FrameStore& frame_store_;
-  ChannelRuntimeMetaStore& channel_meta_store_;
-  NodeRuntimeState& node_state_;
-  BoundedPointerQueue<FrameStore::FrameHandle>& input_queue_;
-  BoundedPointerQueue<FrameStore::BufferHandle>& output_queue_;
-  std::string instance_id_;
+private:
+    std::string instance_id_;
+    FrameStore& frame_store_;
+    BoundedPointerQueue<FrameHandle>& input_queue_;
+    BoundedPointerQueue<FrameHandle>& output_queue_;
+    ChannelRuntimeMetaStore& meta_store_;
+    NodeRuntimeCounters& counters_;
+    int64_t presence_ttl_ns_;
 };

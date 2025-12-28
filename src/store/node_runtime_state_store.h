@@ -5,22 +5,22 @@
 #include <string>
 #include <unordered_map>
 
-// NodeRuntimeState tracks per-node instance counters for observability.
-struct NodeRuntimeState {
-  std::atomic<uint64_t> in_count{0};
-  std::atomic<uint64_t> out_count{0};
-  std::atomic<uint64_t> drop_count{0};
-  std::atomic<uint64_t> error_count{0};
+// 노드 인스턴스 단위 카운터를 저장하는 store.
+struct NodeRuntimeCounters {
+    std::atomic<uint64_t> in_count{0};
+    std::atomic<uint64_t> out_count{0};
+    std::atomic<uint64_t> drop_count{0};
+    std::atomic<uint64_t> error_count{0};
 };
 
 class NodeRuntimeStateStore {
- public:
-  NodeRuntimeState& GetOrCreate(const std::string& node_instance_id) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return state_map_[node_instance_id];
-  }
+public:
+    NodeRuntimeCounters& Get(const std::string& node_instance_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return counters_[node_instance_id];
+    }
 
- private:
-  std::mutex mutex_;
-  std::unordered_map<std::string, NodeRuntimeState> state_map_;
+private:
+    std::unordered_map<std::string, NodeRuntimeCounters> counters_;
+    std::mutex mutex_;
 };

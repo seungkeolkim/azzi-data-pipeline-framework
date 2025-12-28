@@ -1,33 +1,21 @@
 # AZZI Data Pipeline Framework
 
-Stage 0.5 skeleton for adding observability and cross-frame runtime metadata without wiring real
-RTSP ingest. The code keeps the Stage 0 ownership model (store owns data; nodes only carry handles)
-and demonstrates the required visibility features.
+Stage 0.5 데모 파이프라인은 store 단일 소유권 철학을 유지하면서 관찰 가능성(카운터, 메타, 로깅)을 확인하기 위한 스켈레톤이다.
 
-## What's included
-- **ChannelRuntimeMeta** with TTL helpers and downstream control knobs stored by
-  `ChannelRuntimeMetaStore` using a mutex-protected read/write API.
-- **NodeRuntimeStateStore** providing per-node in/out/drop/error counters.
-- **BoundedPointerQueue** with DropOldest behavior so push callers can log and release dropped
-  handles.
-- Dummy decode → dummy detection → output nodes that
-  - generate synthetic frames,
-  - write vehicle observations into the channel runtime meta,
-  - read TTL-based presence in the output node,
-  - enforce the release chain (object → buffer → frame),
-  - log start/stop, drops, and sampled outputs.
-
-## Building and running
+## 빌드
 ```bash
 cmake -S . -B build
 cmake --build build
+```
+
+## 실행
+```bash
 ./build/azzi_pipeline
 ```
 
-The executable prints the sampled logs showing vehicle presence decisions and counter summaries.
-
-## Future options (documented only)
-- Swap the mutex backend for lock-free/atomic channel runtime meta handling once the pipeline
-  reaches later stages.
-- Compile-time switches (e.g., `#define`) for choosing the store backend once configuration is
-  formalized.
+## 구성 요소
+- **FrameStore**: 프레임/버퍼/객체를 단일 소유한다. 노드는 `FrameHandle`만 주고받으며 OutputNode가 release chain을 마무리한다.
+- **BoundedPointerQueue**: 포화 시 가장 오래된 항목을 drop하고 호출자에게 알려준다.
+- **ChannelRuntimeMetaStore**: 채널 단위 글로벌 메타데이터를 mutex로 보호하며, TTL helper를 통해 존재 여부를 판정할 수 있다.
+- **NodeRuntimeStateStore**: 노드 인스턴스별 in/out/drop/error 카운터를 관리한다.
+- **Dummy 노드들**: decode → detection → output 순으로 연결되어 meta write/read, drop 로깅, release chain을 검증한다.
