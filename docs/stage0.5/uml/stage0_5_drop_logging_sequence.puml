@@ -1,0 +1,29 @@
+@startuml
+title Stage 0.5 - DropOldest pipeline + node counters
+
+participant DecodeNode as Decode
+participant FrameQueue as FrameQueue
+participant NodeRuntimeStateStoreInterface as NodeStore
+participant SimpleLogger as Logger
+participant FrameBufferStoreInterface as FrameBufferStore
+participant FrameMetadataStoreInterface as FrameMetadataStore
+
+Decode -> NodeStore : increment_in(channel_id)
+Decode -> FrameQueue : push(frame_metadata*)
+FrameQueue --> Decode : PushOutcome(drop_oldest*)
+
+alt DropOldestItem occurred
+    Decode -> NodeStore : increment_drop(channel_id)
+    Decode -> Logger : warn("drop_oldest", dropped.frame_identifier)
+    Decode -> FrameBufferStore : release(dropped.frame_buffer_handle)
+    Decode -> FrameMetadataStore : release(dropped)
+else No drop
+    Decode -> NodeStore : increment_out(channel_id)
+end
+
+note bottom of NodeStore
+Counters are per node_instance_id
+(not stored inside node objects)
+end note
+
+@enduml

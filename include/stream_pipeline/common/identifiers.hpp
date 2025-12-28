@@ -19,5 +19,6 @@ namespace stream_pipeline {
 using ChannelIdentifier = std::uint32_t;
 using FrameIdentifier   = std::uint64_t;
 using ObjectIdentifier  = std::uint64_t;
+using NodeInstanceIdentifier = std::uint32_t;
 
 }  // namespace stream_pipeline
