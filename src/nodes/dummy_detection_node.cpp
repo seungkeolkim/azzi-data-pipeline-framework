@@ -2,20 +2,31 @@
 
 #include "stream_pipeline/metadata/object_metadata.hpp"
 #include "stream_pipeline/utilities/time_utilities.hpp"
+#include "stream_pipeline/utilities/logger.hpp"
 
 namespace stream_pipeline {
 
 DummyDetectionNode::DummyDetectionNode(
+    ChannelState& channel_state,
     ObjectMetadataStoreInterface& object_metadata_store,
+    FrameMetadataStoreInterface& frame_metadata_store,
     FrameBufferStoreInterface& frame_buffer_store,
+    ChannelRuntimeMetaStoreInterface& channel_runtime_meta_store,
+    NodeRuntimeStateStoreInterface& node_runtime_state_store,
     BoundedPointerQueue<FrameMetadata*>& input_queue,
     BoundedPointerQueue<FrameMetadata*>& output_queue,
     const Configuration& configuration)
-    : object_metadata_store_(object_metadata_store),
+    : channel_state_(channel_state),
+      object_metadata_store_(object_metadata_store),
+      frame_metadata_store_(frame_metadata_store),
       frame_buffer_store_(frame_buffer_store),
+      channel_runtime_meta_store_(channel_runtime_meta_store),
+      node_runtime_state_store_(node_runtime_state_store),
       input_queue_(input_queue),
       output_queue_(output_queue),
-      configuration_(configuration) {}
+      configuration_(configuration) {
+    node_instance_identifier_ = 2;  // Stage 0.5: 정적 인스턴스 ID
+}
 
 DummyDetectionNode::~DummyDetectionNode() {
     stop();
@@ -31,6 +42,7 @@ NodeInterface::StartResult DummyDetectionNode::start() {
     }
     stop_requested_.store(false);
     running_.store(true);
+    Logger::instance().log_with_node(Logger::Level::Info, node_name(), "start requested");
     worker_thread_ = std::thread(&DummyDetectionNode::thread_entry_, this);
     return StartResult::Success;
 }
@@ -49,6 +61,8 @@ void DummyDetectionNode::stop() {
         worker_thread_.join();
     }
     running_.store(false);
+
+    Logger::instance().log_with_node(Logger::Level::Info, node_name(), "stopped");
 }
 
 void DummyDetectionNode::thread_entry_() {
@@ -62,6 +76,10 @@ void DummyDetectionNode::thread_entry_() {
         if (frame_metadata_pointer == nullptr) {
             continue;
         }
+
+        node_runtime_state_store_.write(node_instance_identifier_, [](NodeRuntimeState& state) {
+            state.input_count.fetch_add(1);
+        });
 
         // dropped 프레임이라면, Stage 0에서는 그대로 다음으로 넘기지 않고
         // OutputNode에서 정리하도록 하는 편이 단순하다.
@@ -106,10 +124,60 @@ void DummyDetectionNode::thread_entry_() {
         }
 
         // stage timestamp 기록
-        frame_metadata_pointer->detection_completed_timestamp = now_timestamp_pair();
+        const TimestampPair detection_timestamp = now_timestamp_pair();
+        frame_metadata_pointer->detection_completed_timestamp = detection_timestamp;
+
+        // ChannelRuntimeMeta 업데이트(간단한 패턴으로 vehicle 관측 기록)
+        const bool vehicle_observed = (frame_metadata_pointer->frame_identifier % 2ULL) == 0ULL;
+        if (vehicle_observed) {
+            channel_runtime_meta_store_.write(channel_state_.channel_identifier, [&](ChannelRuntimeMeta& meta) {
+                meta.last_seen_vehicle_monotonic_ns = detection_timestamp.monotonic_time_nanoseconds;
+            });
+        }
 
         // 다음 단계로 전달
-        output_queue_.push(frame_metadata_pointer);
+        auto push_outcome = output_queue_.push(frame_metadata_pointer);
+
+        if (push_outcome.result == BoundedPointerQueue<FrameMetadata*>::PushResult::QueueClosed) {
+            for (const ObjectHandle object_handle : frame_metadata_pointer->object_handles) {
+                object_metadata_store_.release(object_handle);
+            }
+            frame_metadata_pointer->object_handles.clear();
+            frame_buffer_store_.release(frame_metadata_pointer->frame_buffer_handle);
+            frame_metadata_store_.release(frame_metadata_pointer);
+
+            node_runtime_state_store_.write(node_instance_identifier_, [](NodeRuntimeState& state) {
+                state.dropped_count.fetch_add(1);
+            });
+            break;
+        }
+
+        if (push_outcome.dropped_old_pointer != nullptr) {
+            FrameMetadata* dropped_frame_metadata_pointer = push_outcome.dropped_old_pointer;
+            dropped_frame_metadata_pointer->dropped = true;
+            dropped_frame_metadata_pointer->drop_reason = "detection_output_queue_full_drop_oldest";
+
+            for (const ObjectHandle object_handle : dropped_frame_metadata_pointer->object_handles) {
+                object_metadata_store_.release(object_handle);
+            }
+            dropped_frame_metadata_pointer->object_handles.clear();
+            frame_buffer_store_.release(dropped_frame_metadata_pointer->frame_buffer_handle);
+            frame_metadata_store_.release(dropped_frame_metadata_pointer);
+
+            channel_state_.dropped_frame_count.fetch_add(1);
+            node_runtime_state_store_.write(node_instance_identifier_, [](NodeRuntimeState& state) {
+                state.dropped_count.fetch_add(1);
+            });
+
+            Logger::instance().log_with_node(
+                Logger::Level::Warning,
+                node_name(),
+                "dropped oldest frame in detection->output queue");
+        }
+
+        node_runtime_state_store_.write(node_instance_identifier_, [](NodeRuntimeState& state) {
+            state.output_count.fetch_add(1);
+        });
     }
 }
 

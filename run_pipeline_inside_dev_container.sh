@@ -1,1 +1,1 @@
-./build/stream_pipeline_stage0
+./build/stream_pipeline_stage

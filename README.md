@@ -187,7 +187,7 @@ sh run_dev_container.sh
 
 3. Pipeline 빌드 (Dev Container 내부):
 ```bash
-sh run_dev_container.sh
+sh run_build_program_inside_dev_container.sh
 ```
 
 4. Pipeline 실행 (Dev Container 내부):

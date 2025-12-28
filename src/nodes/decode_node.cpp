@@ -1,6 +1,7 @@
 #include "stream_pipeline/nodes/decode_node.hpp"
 
 #include "stream_pipeline/utilities/time_utilities.hpp"
+#include "stream_pipeline/utilities/logger.hpp"
 
 #include <chrono>
 #include <thread>
@@ -11,15 +12,19 @@ DecodeNode::DecodeNode(
     ChannelState& channel_state,
     FrameMetadataStoreInterface& frame_metadata_store,
     FrameBufferStoreInterface& frame_buffer_store,
+    NodeRuntimeStateStoreInterface& node_runtime_state_store,
     BoundedPointerQueue<FrameMetadata*>& frame_metadata_queue,
     QueueOverflowPolicy overflow_policy,
     const Configuration& configuration)
     : channel_state_(channel_state),
       frame_metadata_store_(frame_metadata_store),
       frame_buffer_store_(frame_buffer_store),
+      node_runtime_state_store_(node_runtime_state_store),
       frame_metadata_queue_(frame_metadata_queue),
       overflow_policy_(overflow_policy),
-      configuration_(configuration) {}
+      configuration_(configuration) {
+    node_instance_identifier_ = 1;  // Stage 0.5: 정적 인스턴스 ID
+}
 
 DecodeNode::~DecodeNode() {
     stop();
@@ -37,6 +42,8 @@ NodeInterface::StartResult DecodeNode::start() {
     stop_requested_.store(false);
     running_.store(true);
 
+    Logger::instance().log_with_node(Logger::Level::Info, node_name(), "start requested");
+
     worker_thread_ = std::thread(&DecodeNode::thread_entry_, this);
     return StartResult::Success;
 }
@@ -53,6 +60,8 @@ void DecodeNode::stop() {
     }
 
     running_.store(false);
+
+    Logger::instance().log_with_node(Logger::Level::Info, node_name(), "stopped");
 }
 
 void DecodeNode::thread_entry_() {
@@ -78,6 +87,9 @@ void DecodeNode::thread_entry_() {
             metadata_outcome.frame_metadata_pointer == nullptr) {
 
             // Stage 0 정책: 실패는 프레임 drop으로 격리, 파이프라인은 계속.
+            node_runtime_state_store_.write(node_instance_identifier_, [](NodeRuntimeState& state) {
+                state.error_count.fetch_add(1);
+            });
             std::this_thread::sleep_for(frame_interval);
             continue;
         }
@@ -105,6 +117,9 @@ void DecodeNode::thread_entry_() {
 
             // 버퍼 확보 실패: 메타를 반환하고 프레임 drop
             frame_metadata_store_.release(frame_metadata_pointer);
+            node_runtime_state_store_.write(node_instance_identifier_, [](NodeRuntimeState& state) {
+                state.error_count.fetch_add(1);
+            });
             std::this_thread::sleep_for(frame_interval);
             continue;
         }
@@ -119,6 +134,9 @@ void DecodeNode::thread_entry_() {
             // view 실패: 버퍼와 메타를 반환하고 drop
             frame_buffer_store_.release(frame_metadata_pointer->frame_buffer_handle);
             frame_metadata_store_.release(frame_metadata_pointer);
+            node_runtime_state_store_.write(node_instance_identifier_, [](NodeRuntimeState& state) {
+                state.error_count.fetch_add(1);
+            });
             std::this_thread::sleep_for(frame_interval);
             continue;
         }
@@ -149,6 +167,9 @@ void DecodeNode::thread_entry_() {
         if (push_outcome.result == BoundedPointerQueue<FrameMetadata*>::PushResult::QueueClosed) {
             frame_buffer_store_.release(frame_metadata_pointer->frame_buffer_handle);
             frame_metadata_store_.release(frame_metadata_pointer);
+            node_runtime_state_store_.write(node_instance_identifier_, [](NodeRuntimeState& state) {
+                state.dropped_count.fetch_add(1);
+            });
             break;
         }
 
@@ -168,7 +189,20 @@ void DecodeNode::thread_entry_() {
             frame_metadata_store_.release(dropped_frame_metadata_pointer);
 
             channel_state_.dropped_frame_count.fetch_add(1);
+
+            node_runtime_state_store_.write(node_instance_identifier_, [](NodeRuntimeState& state) {
+                state.dropped_count.fetch_add(1);
+            });
+
+            Logger::instance().log_with_node(
+                Logger::Level::Warning,
+                node_name(),
+                "dropped oldest frame due to full decode queue");
         }
+
+        node_runtime_state_store_.write(node_instance_identifier_, [](NodeRuntimeState& state) {
+            state.output_count.fetch_add(1);
+        });
 
         std::this_thread::sleep_for(frame_interval);
     }

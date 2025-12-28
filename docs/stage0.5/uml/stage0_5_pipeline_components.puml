@@ -1,0 +1,57 @@
+@startuml
+title Stage 0.5 - Pipeline Components and Ownership
+
+package "Stage 0.5" {
+  [SyntheticInputSource or RTSP Stub] as InputSource
+  [DecodeNode\n(Thread 1)] as DecodeNode
+  [DummyDetectionNode\n(Thread 2)] as DetectionNode
+  [OutputNode\n(Thread 3)] as OutputNode
+
+  [FrameMetadataStoreInterface] as FrameMetadataStore
+  [FrameBufferStoreInterface] as FrameBufferStore
+  [ObjectMetadataStoreInterface] as ObjectMetadataStore
+  [ChannelRuntimeMetaStoreInterface] as ChannelRuntimeMetaStore
+  [NodeRuntimeStateStoreInterface] as NodeRuntimeStateStore
+  [BoundedPointerQueue<FrameMetadata*>] as FrameQueue
+  [SimpleLogger] as Logger
+}
+
+DecodeNode --> InputSource : acquire frame data
+DecodeNode --> FrameMetadataStore : acquire / release FrameMetadata*
+DecodeNode --> FrameBufferStore : acquire / view / release FrameBufferHandle
+DecodeNode --> FrameQueue : push(FrameMetadata*)
+DecodeNode --> NodeRuntimeStateStore : increment in/out/drop counters
+DecodeNode --> Logger : start/stop + drop/write events
+
+DetectionNode --> FrameQueue : pop()
+DetectionNode --> ObjectMetadataStore : acquire/release ObjectMetadataHandle
+DetectionNode --> FrameMetadataStore : add object handle references
+DetectionNode --> ChannelRuntimeMetaStore : Write(last_seen_*, decode policy)
+DetectionNode --> NodeRuntimeStateStore : increment in/out/drop counters
+DetectionNode --> Logger : sample detections + drops
+
+OutputNode --> FrameQueue : pop()
+OutputNode --> ChannelRuntimeMetaStore : Read(presence TTL)
+OutputNode --> FrameBufferStore : release(handle)
+OutputNode --> ObjectMetadataStore : release(object handles)
+OutputNode --> FrameMetadataStore : release(FrameMetadata*)
+OutputNode --> NodeRuntimeStateStore : increment in/out/drop counters
+OutputNode --> Logger : summary + drop logging
+
+note bottom of FrameQueue
+Overflow policy: DropOldestItem (pointer only)
+Dropped pointer must be released via stores
+end note
+
+note right of ChannelRuntimeMetaStore
+Store owns ChannelRuntimeMeta structures
+Mutex-backed access controls read/write closures
+TTL helpers enable presence checks
+end note
+
+note right of NodeRuntimeStateStore
+Store owns node-level counters (in/out/drop/error)
+Nodes do not store counters internally
+end note
+
+@enduml

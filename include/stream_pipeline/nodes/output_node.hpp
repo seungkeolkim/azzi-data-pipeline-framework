@@ -2,8 +2,10 @@
 
 #include "stream_pipeline/concurrency/bounded_pointer_queue.hpp"
 #include "stream_pipeline/metadata/channel_state.hpp"
+#include "stream_pipeline/metadata/channel_runtime_meta_store_interface.hpp"
 #include "stream_pipeline/metadata/frame_metadata_store_interface.hpp"
 #include "stream_pipeline/metadata/object_metadata_store_interface.hpp"
+#include "stream_pipeline/metadata/node_runtime_state_store_interface.hpp"
 #include "stream_pipeline/memory/frame_buffer_store_interface.hpp"
 #include "stream_pipeline/runtime/node_interface.hpp"
 
@@ -48,6 +50,8 @@ public:
         FrameMetadataStoreInterface& frame_metadata_store,
         FrameBufferStoreInterface& frame_buffer_store,
         ObjectMetadataStoreInterface& object_metadata_store,
+        ChannelRuntimeMetaStoreInterface& channel_runtime_meta_store,
+        NodeRuntimeStateStoreInterface& node_runtime_state_store,
         BoundedPointerQueue<FrameMetadata*>& input_queue,
         const Configuration& configuration);
 
@@ -76,9 +80,13 @@ private:
     FrameMetadataStoreInterface& frame_metadata_store_;
     FrameBufferStoreInterface& frame_buffer_store_;
     ObjectMetadataStoreInterface& object_metadata_store_;
+    ChannelRuntimeMetaStoreInterface& channel_runtime_meta_store_;
+    NodeRuntimeStateStoreInterface& node_runtime_state_store_;
     BoundedPointerQueue<FrameMetadata*>& input_queue_;
 
     Configuration configuration_;
+
+    NodeInstanceIdentifier node_instance_identifier_{0};
 
     std::atomic<bool> running_{false};
     std::atomic<bool> stop_requested_{false};

@@ -2,6 +2,7 @@
 
 #include "stream_pipeline/utilities/file_utilities.hpp"
 #include "stream_pipeline/utilities/time_utilities.hpp"
+#include "stream_pipeline/utilities/logger.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -14,14 +15,20 @@ OutputNode::OutputNode(
     FrameMetadataStoreInterface& frame_metadata_store,
     FrameBufferStoreInterface& frame_buffer_store,
     ObjectMetadataStoreInterface& object_metadata_store,
+    ChannelRuntimeMetaStoreInterface& channel_runtime_meta_store,
+    NodeRuntimeStateStoreInterface& node_runtime_state_store,
     BoundedPointerQueue<FrameMetadata*>& input_queue,
     const Configuration& configuration)
     : channel_state_(channel_state),
       frame_metadata_store_(frame_metadata_store),
       frame_buffer_store_(frame_buffer_store),
       object_metadata_store_(object_metadata_store),
+      channel_runtime_meta_store_(channel_runtime_meta_store),
+      node_runtime_state_store_(node_runtime_state_store),
       input_queue_(input_queue),
-      configuration_(configuration) {}
+      configuration_(configuration) {
+    node_instance_identifier_ = 3;  // Stage 0.5: 정적 인스턴스 ID
+}
 
 OutputNode::~OutputNode() {
     stop();
@@ -37,6 +44,7 @@ NodeInterface::StartResult OutputNode::start() {
     }
     stop_requested_.store(false);
     running_.store(true);
+    Logger::instance().log_with_node(Logger::Level::Info, node_name(), "start requested");
     worker_thread_ = std::thread(&OutputNode::thread_entry_, this);
     return StartResult::Success;
 }
@@ -50,6 +58,8 @@ void OutputNode::stop() {
         worker_thread_.join();
     }
     running_.store(false);
+
+    Logger::instance().log_with_node(Logger::Level::Info, node_name(), "stopped");
 }
 
 void OutputNode::thread_entry_() {
@@ -74,6 +84,10 @@ void OutputNode::thread_entry_() {
             continue;
         }
 
+        node_runtime_state_store_.write(node_instance_identifier_, [](NodeRuntimeState& state) {
+            state.input_count.fetch_add(1);
+        });
+
         // 1) object handles -> object metadata 읽기
         std::vector<ObjectMetadata> objects;
         objects.reserve(frame_metadata_pointer->object_handles.size());
@@ -89,6 +103,22 @@ void OutputNode::thread_entry_() {
         if (jsonl_stream.good()) {
             write_jsonl_record_(jsonl_stream, *frame_metadata_pointer, objects);
             jsonl_stream.flush();
+        }
+
+        TimestampPair output_timestamp = now_timestamp_pair();
+
+        bool vehicle_present_now = false;
+        channel_runtime_meta_store_.read(frame_metadata_pointer->channel_identifier, [&](const ChannelRuntimeMeta& meta) {
+            vehicle_present_now = meta.is_vehicle_present(output_timestamp.monotonic_time_nanoseconds);
+        });
+
+        if ((frame_metadata_pointer->frame_identifier % 10ULL) == 0ULL) {
+            Logger::instance().log_with_node(
+                Logger::Level::Info,
+                node_name(),
+                vehicle_present_now
+                    ? "vehicle presence detected in TTL window"
+                    : "vehicle not observed within TTL window");
         }
 
         // 3) 이미지 출력(옵션)
@@ -128,8 +158,12 @@ void OutputNode::thread_entry_() {
         }
 
         // 4) output timestamp 기록
-        frame_metadata_pointer->output_completed_timestamp = now_timestamp_pair();
+        frame_metadata_pointer->output_completed_timestamp = output_timestamp;
         channel_state_.output_frame_count.fetch_add(1);
+
+        node_runtime_state_store_.write(node_instance_identifier_, [](NodeRuntimeState& state) {
+            state.output_count.fetch_add(1);
+        });
 
         // 5) release chain (Stage 0에서 가장 중요)
         // 5-1) objects release
