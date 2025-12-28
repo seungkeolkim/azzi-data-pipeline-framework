@@ -1,0 +1,431 @@
+아래는 이 대화를 다른 세션에서 그대로 이어가기 위해 사용하는 “Continuation / Context Summary” 입니다.
+길어도 상관없다고 하셔서, 의사결정의 맥락·왜 이런 결정을 했는지·버린 선택지까지 포함했습니다.
+이 문서는 그대로 복사해서 다음 대화 첫 메시지로 붙여 넣으면 됩니다.
+
+Context Summary – AI Stream Pipeline Framework (MVP 착수용)
+0. 이 문서의 목적
+
+
+이 문서는 이전 대화 전체의 맥락을 보존하기 위한 요약본이다.
+
+
+다음 대화에서 이 문서를 그대로 전달하면,
+
+
+이미 합의된 전제·결정·우려사항을 다시 설명하지 않아도
+
+
+곧바로 다음 설계/구현 논의로 이어갈 수 있다.
+
+
+
+
+
+1. 최종 목표 (Big Picture)
+1.1 무엇을 만들고 싶은가
+
+
+고정된 영상 분석 파이프라인(DeepStream식)을 대체하는
+
+
+동적 DAG 기반 Stream Pipeline Framework
+
+
+영상(RTSP/VMS)을 포함하되, 영상에만 한정되지 않는 범용 데이터 스트림 처리 프레임워크
+
+
+1.2 핵심 특징
+
+
+Node = thread/worker 개념
+
+
+채널 단위, 객체 단위로 실행되는 DAG가 서로 다를 수 있음
+
+
+프로세스가 떠 있는 상태에서:
+
+
+DAG 자체 교체 가능
+
+
+DAG에 노드(모델) 추가/삭제 가능
+
+
+기존 모델을 다른 모델로 교체 가능
+
+
+
+
+Meta 중심 설계 (Frame / Object / Channel / Application Meta 공유)
+
+
+Kafka 같은 외부 메시지 브로커 의존 최소화 (메모리 기반 Meta Access 지향)
+
+
+1.3 장기 방향
+
+
+SDK → Framework → Platform → Marketplace
+
+
+Pipeline 자체를 “구성·판매·배포”하는 구조
+
+
+Palantir(Ontology), Databricks(Data Intelligence Platform)를 컨셉 레벨 벤치마크로 인식
+
+
+
+2. MVP 범위 정의 (명확히 축소)
+2.1 MVP의 목표
+
+
+RTSP → decode → detection → output 까지의 E2E 파이프라인 완주
+
+
+성능 최적화보다 프레임워크 골격, 계약, 스케줄 구조 검증이 우선
+
+
+2.2 MVP에서 하지 않기로 한 것
+
+
+Triton Server 기반 운영/모델 관리
+
+
+멀티 디바이스(AMD/Intel) 완전 지원
+
+
+복잡한 동적 DAG 엔진
+
+
+zero-copy 완전 최적화
+
+
+
+3. 추론 스택 관련 논의 요약
+3.1 전제
+
+
+NVIDIA가 시장의 절대 다수 → NVIDIA 기준 최적화를 망치지 않는 것이 최우선
+
+
+비-CUDA 디바이스(AMD/Intel)는 “수용 가능 수준의 타협”은 허용
+
+
+device memory 직접 access / copy 최소화는 핵심 철학
+
+
+단, 모든 디바이스에서 강제하지는 않음
+
+
+
+
+3.2 각 스택에 대한 인식 (합의)
+TensorRT
+
+
+단일 추론기, in-process
+
+
+device ptr / CUDA stream / lifetime을 개발자가 100% 통제 가능
+
+
+NVIDIA에서 유일하게 진짜 zero-copy 파이프라인이 가능한 선택지
+
+
+단점: 운영·모델 교체·스케줄링은 직접 구현해야 함
+
+
+Triton
+
+
+ORT와 TRT의 “중간”이 아님
+
+
+추론 엔진이 아니라 Inference Server
+
+
+모델 업로드/버전/인스턴스/스케줄링 관리가 강점
+
+
+메모리 경로·실행 시점은 서버 정책에 일부 종속
+
+
+MVP 범위에서는 과함
+
+
+ONNX Runtime (ORT)
+
+
+범용성 최고 (NVIDIA/AMD/Intel/CPU)
+
+
+인터페이스 통일에는 매우 유리
+
+
+그러나:
+
+
+device memory를 “1급 시민”으로 다루기 어려움
+
+
+I/O Binding도 copy를 완전히 통제하기는 어려움
+
+
+
+
+device-resident pipeline을 하드 요구사항으로 두면 장기 메인으로는 부적합
+
+
+OpenVINO
+
+
+Intel 쪽에서는 가장 성숙
+
+
+Remote Tensor/Remote Context로 핸들 기반 memory sharing 가능
+
+
+Intel 디바이스용 adaptor 후보
+
+
+ROCm
+
+
+AMD 쪽은 단일 “TensorRT 같은 정답”이 없음
+
+
+현실적으로 ORT ROCm EP + copy 최소화 전략이 최선
+
+
+
+4. 단계적 MVP 전략 (중요 합의)
+전체 단계 개요
+
+
+0단계 → 1단계 → 2단계
+
+
+단계가 올라갈수록 “추론 성능”보다 “메모리/동시성 최적화”를 다룸
+
+
+
+5. 0단계: Decode → Dummy Detection → Output (Pre-MVP)
+목적
+
+
+추론 기술과 무관하게 파이프라인 뼈대 검증
+
+
+thread/queue 구조, output 동기화, 메타 흐름 확인
+
+
+구성
+
+
+RTSP ingest + decode
+
+
+Dummy detection:
+
+
+프레임마다 bbox 1개 (중앙 고정)
+
+
+conf=1.0, class_id=0
+
+
+
+
+Output:
+
+
+File output (overlay 이미지 또는 mp4)
+
+
+Text meta output (JSONL)
+
+
+(선택) RTSP re-stream은 인터페이스만 준비
+
+
+
+
+중요한 원칙
+
+
+Dummy라도 정식 Det 구조체 계약을 사용
+
+
+Frame payload는 host/device 교체 가능하도록 추상화
+
+
+Node = thread/worker, 큐 기반 연결
+
+
+
+6. 1단계: ORT 기반 Detection (우선 CPU)
+목적
+
+
+“실제 모델”을 붙였을 때도
+
+
+파이프라인 구조
+
+
+입력/출력 계약
+
+
+adaptor 교체 방식
+이 유지되는지 검증
+
+
+
+
+핵심 산출물
+
+
+InferAdaptor 인터페이스 확정
+
+
+Preprocess 노드 분리 (Frame → 표준 텐서)
+
+
+Postprocess 노드 (raw → Det)
+
+
+모델 교체가 adaptor 교체로 끝나는 구조
+
+
+명확한 가드레일
+
+
+ORT CUDA EP 최적화에 깊게 들어가지 않음
+
+
+CPU 중심 구현으로 굳어지지 않도록:
+
+
+입력 텐서 계약은 TRT 친화적(NCHW, batch 포함) 으로 고정
+
+
+
+
+목표는 “완주 + 계약 확정”이지 성능이 아님
+
+
+
+7. 2단계: TensorRT 교체 + CUDA Memory 최적화
+목적
+
+
+decode → preprocess → infer를 GPU resident로 구성
+
+
+Host↔Device copy 최소화
+
+
+지연/처리량 최적화
+
+
+주요 작업
+
+
+TensorRT InferAdaptor 구현
+
+
+execution context 풀 + CUDA stream 관리
+
+
+GPU preprocess (CUDA/NPP/custom kernel)
+
+
+모델별 동시성, 큐 폭주 방지
+
+
+성능/메모리 copy 측정
+
+
+
+8. 공통 가드레일 (모든 단계)
+반드시 지켜야 할 계약 3종
+
+
+FrameMeta / FrameBuffer
+
+
+Det 결과 구조체
+
+
+OutputMeta(JSONL 등)
+
+
+구조적 원칙
+
+
+Preprocess는 Infer 밖에 둔다
+
+
+Node 간 연결은 큐/메시지 기반
+
+
+Output은 시각화 + 구조화 메타를 동시에 남긴다
+
+
+
+9. Thread / Async 모델에 대한 인식
+
+
+Node는 thread/worker를 의미
+
+
+초기에는 단순한 3-stage 구조로 시작:
+
+
+Decode / Infer / Output
+
+
+
+
+정교한 스케줄러는 MVP 이후
+
+
+단, 비동기/큐 기반 구조는 0단계부터 유지
+
+
+
+10. 현재 논의 위치 (중요)
+
+
+전체 컨셉, MVP 범위, 단계별 전략에 대한 합의 완료
+
+
+다음 논의 후보:
+
+
+InferAdaptor 최소 인터페이스 정의
+
+
+FrameMeta / Det / OutputMeta 스키마 고정
+
+
+0단계 파이프라인의 구체적 thread/queue 다이어그램
+
+
+RTSP decode 구현 컷라인(어디까지 MVP에 넣을지)
+
+
+
+
+
+11. 다음 대화 시작 예시 문장
+
+아래 Context Summary를 전제로 이어서 논의하고 싶다.
+다음 주제는 (예: InferAdaptor 인터페이스 / 0단계 아키텍처 다이어그램) 이다.
+
+
+✅ 이 문서는 그대로 저장해 두고,
+✅ 다음 대화에서 첫 메시지로 붙여 넣으면 된다.
+필요하다면, 이 Summary를 버전 관리(v1, v2) 하거나
+1페이지 초압축 버전으로도 다시 만들어 줄 수 있다.

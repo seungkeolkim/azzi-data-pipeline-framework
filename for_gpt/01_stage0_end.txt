@@ -1,0 +1,594 @@
+===== 요청 =====
+우선 stage 0 동결 후 다음 작업을 하는게 좋을것 같아.
+지금 stage 0을 고도화 수정 해 봤자 아마 나중에 싹 갈아엎게 될테니까 too much한 작업일것 같아.
+
+다만 debug print 등으로 무엇이 일어나고 있음을 확인은 가능했으면 해. 만약 한다면 logger 정도 추가?
+하지만 이것도 stage 0.5 혹은 stage 1정도로 좋을것 같아.
+
+우선 현재 대화가 길어졌으니 이정도로 하고 다른 대화에서 이어나가자.
+본 대화의 시작지점때처럼 현재의 의사결정이나 최중요사항, 컨벤션 (많은 주석, 약자 사용 금지, 1달 뒤의 나는 남이다 등), 설계사항들의 다른 채팅세션의 너가 봐도 이해하고 착수할 수 있도록 요약해줘.
+길어도 상관없으니까.
+
+그리고 소스코드들과 ppt들도 다 제출해서 다음 채팅에서도 문제 없이 이어나가도록 할거야
+
+
+===== 답변 =====
+
+아래는 **다음 채팅 세션에서 그대로 붙여 넣어도 맥락이 100% 복원되도록 만든 “컨텍스트 보존용 요약본”**입니다.
+의사결정, 컨벤션, 설계 철학, Stage 0 결과까지 모두 포함했습니다.
+길지만, “한 달 뒤의 나 = 남” 기준으로 작성했습니다.
+
+Context Summary – Stream Pipeline Framework (Stage 0 완료 시점)
+0. 이 문서의 목적
+
+이 문서는 이전 대화 전체의 설계 의사결정·컨벤션·기술적 합의사항을 보존하기 위한 요약본이다.
+
+다음 채팅에서 이 문서를 그대로 전달하면:
+
+이미 합의된 전제·결정·우려사항을 다시 설명하지 않아도 되고
+
+바로 Stage 1 설계/구현 논의로 이어갈 수 있다.
+
+1. 최종 목표 (Big Picture)
+1.1 무엇을 만들고 싶은가
+
+DeepStream처럼 고정된 영상 분석 파이프라인이 아니라
+
+동적으로 구성/교체 가능한 DAG 기반 Stream Pipeline Framework
+
+영상(RTSP, TCP frame 등)을 포함하되, 영상에만 국한되지 않는 범용 스트림 처리 프레임워크
+
+1.2 핵심 특징 (합의)
+
+Node = thread / worker 개념
+
+채널 단위, 객체 단위로 서로 다른 DAG 가능
+
+프로세스가 살아있는 상태에서:
+
+DAG 자체 교체
+
+노드 추가/삭제
+
+모델 교체 가능
+
+Meta 중심 설계
+
+FrameMetadata
+
+ObjectMetadata
+
+ChannelState
+
+GlobalState
+
+Kafka 같은 외부 브로커 의존 최소화
+
+메모리 기반 Meta 접근이 기본
+
+1.3 장기 방향
+
+SDK → Framework → Platform → Marketplace
+
+Pipeline 자체를 “구성·배포·판매”하는 구조
+
+Palantir Foundry, Airflow YAML은 컨셉 레벨 참고 대상
+
+Foundry 자체는 잊어도 무방
+
+2. 개발 컨벤션 (매우 중요, 강한 합의)
+2.1 네이밍 / 가독성
+
+약자 사용 최소화
+
+cv, std, I(Interface), T(Type) 정도만 허용
+
+직접 만든 “개념”에는 약자 금지
+
+변수명은 F12 눌러야 타입이 보이는 이름 금지
+
+object_handle처럼 의미가 바로 드러나야 함
+
+2.2 주석
+
+주석은 항상 과할 정도로
+
+C++은 Python보다 읽기 어렵다
+
+“한 달 뒤의 나는 남이다”를 기준으로 설명
+
+2.3 구조체 / Status / Result
+
+공용 Status / Result 공유 금지
+
+Queue, Store, Node 등 각 컨텍스트별 Result 타입 분리
+
+이름만 같은 enum이라도 의미가 다르면 분리
+
+3. Stage 0의 정의 (완료 & 동결)
+3.1 Stage 0 목표
+
+RTSP → decode → detection → output E2E 파이프라인 완주
+
+성능 최적화보다:
+
+구조
+
+계약
+
+ownership
+
+thread / queue 안정성 검증
+
+3.2 Stage 0에서 하지 않기로 한 것
+
+실제 RTSP ingest / FFmpeg / GStreamer
+
+CUDA / zero-copy
+
+Triton
+
+Tracker lifecycle (shadow age, probation age 등)
+
+memory pool 고도화
+
+4. Stage 0 아키텍처 (확정)
+4.1 Node 구성
+
+DecodeNode
+
+Stage 0에서는 InputSourceNode와 분리하지 않음
+
+입력 획득 + decode(현재는 synthetic frame) + queue push
+
+DummyDetectionNode
+
+프레임마다 중앙 고정 bbox 1개 생성
+
+OutputNode
+
+JSONL 출력
+
+PPM 이미지 출력(optional)
+
+모든 release chain의 종착점
+
+4.2 Thread / Queue 모델
+
+Node = thread
+
+Node 간 연결은 BoundedPointerQueue<FrameMetadata*>
+
+Queue에는 데이터가 아니라 포인터만
+
+Queue overflow 정책: DropOldestItem
+
+5. Metadata / Store 설계 (핵심 합의)
+5.1 FrameMetadata
+
+FrameMetadata는 실제 데이터 소유 X
+
+FrameBufferHandle, ObjectHandle만 보유
+
+필수 필드:
+
+channel_identifier
+
+frame_identifier
+
+frame_buffer_handle
+
+object_handles (vector)
+
+decode_completed_timestamp
+
+detection_completed_timestamp
+
+output_completed_timestamp
+
+dropped / drop_reason
+
+TODO (문서에만 기록, 구현은 Stage 0 단순화)
+
+receive_timestamp / decode_timestamp 분리하는 것이 이상적
+
+Stage 1/2에서 확장 검토
+
+5.2 Store 원칙
+
+FrameMetadataStore
+
+FrameBufferStore
+
+ObjectMetadataStore
+
+공통 원칙:
+
+Store가 메모리를 소유
+
+Node는 handle / pointer만 사용
+
+release 책임 명확
+
+6. Drop / Failure 정책 (강한 합의)
+
+Queue full → DropOldestItem
+
+Drop은:
+
+파이프라인 중단 금지
+
+해당 프레임만 유실
+
+Sink 실패 (파일 I/O 등):
+
+무조건 drop
+
+시스템 전체 영향 금지
+
+7. InputSource 분리 관련 결정
+7.1 합의된 결정
+
+Stage 0에서는 DecodeNode에 포함
+
+Stage 1에서 InputSourceNode 분리
+
+7.2 장기 방향
+
+InputSourceNode:
+
+RTSP / TCP frame / 기타 프로토콜
+
+출력: EncodedVideoPacket
+
+DecodeNode:
+
+decode 전담
+
+codec / GPU / CPU 선택
+
+InputSource 개수만큼 Node pair 생성
+
+8. 빌드 / 실행 상태 (확인 완료)
+
+Docker 기반 개발 환경 (ubuntu 22.04)
+
+--network host 사용
+
+CMake + Ninja 빌드 성공
+
+Stage 0 바이너리:
+
+정상 기동
+
+약 10초 실행
+
+정상 종료
+
+deadlock / segfault / 무한 루프 없음
+
+9. Stage 0 현재 상태 평가
+
+Stage 0는 동결(freeze) 하기로 결정
+
+더 고도화해봤자 Stage 1에서 갈아엎을 가능성 큼 → Too much
+
+debug print / logger 도입은:
+
+Stage 0.5 혹은 Stage 1에서 검토
+
+10. 다음 단계 (Stage 1 후보)
+
+다음 채팅에서 이어갈 수 있는 주제:
+
+Stage 1 전체 구조 재정의 (InputSourceNode + DecodeNode 분리)
+
+EncodedVideoPacket 구조체 설계
+
+RTSP ingest 구현 선택:
+
+FFmpeg vs GStreamer
+
+Logger 설계 (프레임워크 공용 vs Node별)
+
+11. 다음 채팅 시작 예시 문장
+
+아래 Context Summary를 전제로 이어서 논의하고 싶다.
+Stage 0은 동결되었고, 다음 주제는 Stage 1 설계다.
+
+이 요약본은 그대로 저장해서 다음 채팅의 첫 메시지로 붙여넣으면 됩니다.
+소스코드와 PPT를 함께 제공한다는 전제에서도 문제없이 맥락이 이어지도록 작성했습니다.
+
+다음 세션에서 이어서 진행하겠습니다.
+
+
+===== 추가 =====
+
+아 stage 0, 1, 2 가 뭔지에 대한 설명이 빠졌네.
+초기에 설계한 stage들은 다음과 같아
+stage 0 : decode, detection, output으로만 이뤄진 pre-mvp로 mvp의 뼈대. pipeline의 기본골자가 돌아감 만을 확인
+stage 1 : stage 0 기반 실제 decode와 detection이 추가. device간 이동은 크게 고려하지 않고 cpu에서만 실행. onnx runtime 기반으로 진행된다.
+stage 2 : tensorrt로 교체, 실제로 gpu 최적화까지 진행하기
+
+stage 0.5 (optional) : stage 0의 로깅 등 가시성 보강
+
+현재까지 2 개의 채팅 세션이 있었고 1 : mvp의 기획 및 core lib 설계, 2 : stage0 개발 이었어.
+stage 0 개발 전에 전달된 결정사항도 같이 줄게
+
+=====
+
+아래는 이 대화를 다른 세션에서 그대로 이어가기 위해 사용하는 “Continuation / Context Summary” 입니다.
+길어도 상관없다고 하셔서, 의사결정의 맥락·왜 이런 결정을 했는지·버린 선택지까지 포함했습니다.
+이 문서는 그대로 복사해서 다음 대화 첫 메시지로 붙여 넣으면 됩니다.
+
+Context Summary – AI Stream Pipeline Framework (MVP 착수용)
+0. 이 문서의 목적
+
+이 문서는 이전 대화 전체의 맥락을 보존하기 위한 요약본이다.
+
+다음 대화에서 이 문서를 그대로 전달하면,
+
+이미 합의된 전제·결정·우려사항을 다시 설명하지 않아도
+
+곧바로 다음 설계/구현 논의로 이어갈 수 있다.
+
+1. 최종 목표 (Big Picture)
+1.1 무엇을 만들고 싶은가
+
+고정된 영상 분석 파이프라인(DeepStream식)을 대체하는
+
+동적 DAG 기반 Stream Pipeline Framework
+
+영상(RTSP/VMS)을 포함하되, 영상에만 한정되지 않는 범용 데이터 스트림 처리 프레임워크
+
+1.2 핵심 특징
+
+Node = thread/worker 개념
+
+채널 단위, 객체 단위로 실행되는 DAG가 서로 다를 수 있음
+
+프로세스가 떠 있는 상태에서:
+
+DAG 자체 교체 가능
+
+DAG에 노드(모델) 추가/삭제 가능
+
+기존 모델을 다른 모델로 교체 가능
+
+Meta 중심 설계 (Frame / Object / Channel / Application Meta 공유)
+
+Kafka 같은 외부 메시지 브로커 의존 최소화 (메모리 기반 Meta Access 지향)
+
+1.3 장기 방향
+
+SDK → Framework → Platform → Marketplace
+
+Pipeline 자체를 “구성·판매·배포”하는 구조
+
+Palantir(Ontology), Databricks(Data Intelligence Platform)를 컨셉 레벨 벤치마크로 인식
+
+2. MVP 범위 정의 (명확히 축소)
+2.1 MVP의 목표
+
+RTSP → decode → detection → output 까지의 E2E 파이프라인 완주
+
+성능 최적화보다 프레임워크 골격, 계약, 스케줄 구조 검증이 우선
+
+2.2 MVP에서 하지 않기로 한 것
+
+Triton Server 기반 운영/모델 관리
+
+멀티 디바이스(AMD/Intel) 완전 지원
+
+복잡한 동적 DAG 엔진
+
+zero-copy 완전 최적화
+
+3. 추론 스택 관련 논의 요약
+3.1 전제
+
+NVIDIA가 시장의 절대 다수 → NVIDIA 기준 최적화를 망치지 않는 것이 최우선
+
+비-CUDA 디바이스(AMD/Intel)는 “수용 가능 수준의 타협”은 허용
+
+device memory 직접 access / copy 최소화는 핵심 철학
+
+단, 모든 디바이스에서 강제하지는 않음
+
+3.2 각 스택에 대한 인식 (합의)
+TensorRT
+
+단일 추론기, in-process
+
+device ptr / CUDA stream / lifetime을 개발자가 100% 통제 가능
+
+NVIDIA에서 유일하게 진짜 zero-copy 파이프라인이 가능한 선택지
+
+단점: 운영·모델 교체·스케줄링은 직접 구현해야 함
+
+Triton
+
+ORT와 TRT의 “중간”이 아님
+
+추론 엔진이 아니라 Inference Server
+
+모델 업로드/버전/인스턴스/스케줄링 관리가 강점
+
+메모리 경로·실행 시점은 서버 정책에 일부 종속
+
+MVP 범위에서는 과함
+
+ONNX Runtime (ORT)
+
+범용성 최고 (NVIDIA/AMD/Intel/CPU)
+
+인터페이스 통일에는 매우 유리
+
+그러나:
+
+device memory를 “1급 시민”으로 다루기 어려움
+
+I/O Binding도 copy를 완전히 통제하기는 어려움
+
+device-resident pipeline을 하드 요구사항으로 두면 장기 메인으로는 부적합
+
+OpenVINO
+
+Intel 쪽에서는 가장 성숙
+
+Remote Tensor/Remote Context로 핸들 기반 memory sharing 가능
+
+Intel 디바이스용 adaptor 후보
+
+ROCm
+
+AMD 쪽은 단일 “TensorRT 같은 정답”이 없음
+
+현실적으로 ORT ROCm EP + copy 최소화 전략이 최선
+
+4. 단계적 MVP 전략 (중요 합의)
+전체 단계 개요
+
+0단계 → 1단계 → 2단계
+
+단계가 올라갈수록 “추론 성능”보다 “메모리/동시성 최적화”를 다룸
+
+5. 0단계: Decode → Dummy Detection → Output (Pre-MVP)
+목적
+
+추론 기술과 무관하게 파이프라인 뼈대 검증
+
+thread/queue 구조, output 동기화, 메타 흐름 확인
+
+구성
+
+RTSP ingest + decode
+
+Dummy detection:
+
+프레임마다 bbox 1개 (중앙 고정)
+
+conf=1.0, class_id=0
+
+Output:
+
+File output (overlay 이미지 또는 mp4)
+
+Text meta output (JSONL)
+
+(선택) RTSP re-stream은 인터페이스만 준비
+
+중요한 원칙
+
+Dummy라도 정식 Det 구조체 계약을 사용
+
+Frame payload는 host/device 교체 가능하도록 추상화
+
+Node = thread/worker, 큐 기반 연결
+
+6. 1단계: ORT 기반 Detection (우선 CPU)
+목적
+
+“실제 모델”을 붙였을 때도
+
+파이프라인 구조
+
+입력/출력 계약
+
+adaptor 교체 방식
+이 유지되는지 검증
+
+핵심 산출물
+
+InferAdaptor 인터페이스 확정
+
+Preprocess 노드 분리 (Frame → 표준 텐서)
+
+Postprocess 노드 (raw → Det)
+
+모델 교체가 adaptor 교체로 끝나는 구조
+
+명확한 가드레일
+
+ORT CUDA EP 최적화에 깊게 들어가지 않음
+
+CPU 중심 구현으로 굳어지지 않도록:
+
+입력 텐서 계약은 TRT 친화적(NCHW, batch 포함) 으로 고정
+
+목표는 “완주 + 계약 확정”이지 성능이 아님
+
+7. 2단계: TensorRT 교체 + CUDA Memory 최적화
+목적
+
+decode → preprocess → infer를 GPU resident로 구성
+
+Host↔Device copy 최소화
+
+지연/처리량 최적화
+
+주요 작업
+
+TensorRT InferAdaptor 구현
+
+execution context 풀 + CUDA stream 관리
+
+GPU preprocess (CUDA/NPP/custom kernel)
+
+모델별 동시성, 큐 폭주 방지
+
+성능/메모리 copy 측정
+
+8. 공통 가드레일 (모든 단계)
+반드시 지켜야 할 계약 3종
+
+FrameMeta / FrameBuffer
+
+Det 결과 구조체
+
+OutputMeta(JSONL 등)
+
+구조적 원칙
+
+Preprocess는 Infer 밖에 둔다
+
+Node 간 연결은 큐/메시지 기반
+
+Output은 시각화 + 구조화 메타를 동시에 남긴다
+
+9. Thread / Async 모델에 대한 인식
+
+Node는 thread/worker를 의미
+
+초기에는 단순한 3-stage 구조로 시작:
+
+Decode / Infer / Output
+
+정교한 스케줄러는 MVP 이후
+
+단, 비동기/큐 기반 구조는 0단계부터 유지
+
+10. 현재 논의 위치 (중요)
+
+전체 컨셉, MVP 범위, 단계별 전략에 대한 합의 완료
+
+다음 논의 후보:
+
+InferAdaptor 최소 인터페이스 정의
+
+FrameMeta / Det / OutputMeta 스키마 고정
+
+0단계 파이프라인의 구체적 thread/queue 다이어그램
+
+RTSP decode 구현 컷라인(어디까지 MVP에 넣을지)
+
+11. 다음 대화 시작 예시 문장
+
+아래 Context Summary를 전제로 이어서 논의하고 싶다.
+다음 주제는 (예: InferAdaptor 인터페이스 / 0단계 아키텍처 다이어그램) 이다.
+
+✅ 이 문서는 그대로 저장해 두고,
+✅ 다음 대화에서 첫 메시지로 붙여 넣으면 된다.
+
+필요하다면, 이 Summary를 버전 관리(v1, v2) 하거나
+1페이지 초압축 버전으로도 다시 만들어 줄 수 있다.
