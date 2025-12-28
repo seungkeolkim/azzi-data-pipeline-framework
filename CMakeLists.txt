@@ -26,25 +26,25 @@ file(GLOB_RECURSE STREAM_PIPELINE_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
 )
 
-add_executable(stream_pipeline_stage0
+add_executable(stream_pipeline_stage
     ${STREAM_PIPELINE_SOURCES}
 )
 
-target_include_directories(stream_pipeline_stage0
+target_include_directories(stream_pipeline_stage
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
 # Threads (std::thread uses pthread under the hood on Linux)
 find_package(Threads REQUIRED)
-target_link_libraries(stream_pipeline_stage0
+target_link_libraries(stream_pipeline_stage
     PRIVATE
         Threads::Threads
 )
 
 # Optional: stricter warnings (enable if you prefer)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    target_compile_options(stream_pipeline_stage0 PRIVATE
+    target_compile_options(stream_pipeline_stage PRIVATE
         -Wall -Wextra -Wpedantic
         -Wno-unused-parameter
     )
