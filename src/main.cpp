@@ -4,9 +4,12 @@
 #include "stream_pipeline/stores/simple_frame_buffer_store.hpp"
 #include "stream_pipeline/stores/simple_frame_metadata_store.hpp"
 #include "stream_pipeline/stores/simple_object_metadata_store.hpp"
+#include "stream_pipeline/stores/simple_channel_runtime_meta_store.hpp"
+#include "stream_pipeline/stores/simple_node_runtime_state_store.hpp"
 #include "stream_pipeline/nodes/decode_node.hpp"
 #include "stream_pipeline/nodes/dummy_detection_node.hpp"
 #include "stream_pipeline/nodes/output_node.hpp"
+#include "stream_pipeline/utilities/logger.hpp"
 
 #include <chrono>
 #include <iostream>
@@ -29,6 +32,12 @@ int main() {
     SimpleFrameMetadataStore frame_metadata_store(/*capacity*/ 64);
     SimpleFrameBufferStore frame_buffer_store(/*capacity*/ 32);
     SimpleObjectMetadataStore object_metadata_store;
+    SimpleChannelRuntimeMetaStore channel_runtime_meta_store;
+    SimpleNodeRuntimeStateStore node_runtime_state_store;
+
+    node_runtime_state_store.register_node(1, "DecodeNode");
+    node_runtime_state_store.register_node(2, "DummyDetectionNode");
+    node_runtime_state_store.register_node(3, "OutputNode");
 
     // Queues:
     // - DecodeNode -> DummyDetectionNode
@@ -68,13 +77,18 @@ int main() {
         channel_state,
         frame_metadata_store,
         frame_buffer_store,
+        node_runtime_state_store,
         decode_to_detection_queue,
         QueueOverflowPolicy::DropOldestItem,
         decode_configuration));
 
     nodes.push_back(std::make_unique<DummyDetectionNode>(
+        channel_state,
         object_metadata_store,
+        frame_metadata_store,
         frame_buffer_store,
+        channel_runtime_meta_store,
+        node_runtime_state_store,
         decode_to_detection_queue,
         detection_to_output_queue,
         detection_configuration));
@@ -84,6 +98,8 @@ int main() {
         frame_metadata_store,
         frame_buffer_store,
         object_metadata_store,
+        channel_runtime_meta_store,
+        node_runtime_state_store,
         detection_to_output_queue,
         output_configuration));
 
