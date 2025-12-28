@@ -1,0 +1,39 @@
+@startuml
+title Stage 0.5 - ChannelRuntimeMeta TTL Window (Write in A, Read in C)
+
+hide footbox
+skinparam shadowing false
+
+participant "DummyDetectionNode (A)" as A
+participant "OutputNode (C)" as C
+participant "ChannelRuntimeMetaStore\n(mutex; read=find-only)" as Store
+participant "ChannelRuntimeMeta" as Meta
+participant "Logger" as Logger
+
+== A updates meta (write can create) ==
+A -> Store : write(channel_id, callback)
+activate Store
+Store -> Meta : get_or_create(channel_id)\n(WRITE path)
+Store -> Meta : last_seen_vehicle = now_mono_ns
+deactivate Store
+
+== C reads meta (read must not create) ==
+C -> Store : read(channel_id, callback)
+activate Store
+alt meta exists
+  Store -> Meta : find(channel_id)\n(READ path)
+  Store --> C : callback(const Meta&)\nC computes is_vehicle_present(now)
+  C -> Logger : info(sample)\nvehicle_present=true/false
+else meta missing
+  Store --> C : return (no callback)
+  C -> Logger : (optional) debug sample\nmeta_missing=true
+end
+deactivate Store
+
+note right of Store
+Design decision (4.1):
+- read() must never create.
+- write() may create.
+end note
+
+@enduml

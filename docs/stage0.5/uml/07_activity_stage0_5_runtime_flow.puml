@@ -1,0 +1,49 @@
+@startuml
+title Stage 0.5 - Runtime Activity (Threads, Queues, Stores)
+
+skinparam shadowing false
+
+start
+:main creates stores;\n(FrameMetadataStore, FrameBufferStore, ObjectMetadataStore,\nChannelRuntimeMetaStore, NodeRuntimeStateStore);
+:main creates ChannelState;
+:main creates nodes (Decode, DummyDetection, Output)\nwith node_instance_id;
+fork
+  :Decode thread loop;
+  repeat
+    :Acquire FrameMetadata*;
+    :Acquire FrameBufferHandle and fill synthetic frame;
+    :Update ChannelState.decoded_frame_count;
+    :Push to Queue1;
+    if (Queue1 full?) then (yes)
+      :DropOldest pointer returned;
+      :Update ChannelState.dropped_frame_count;
+      :Release dropped pointer;
+    endif
+  repeat while (stop not requested)
+fork again
+  :DummyDetection thread loop;
+  repeat
+    :Pop from Queue1;
+    :Update NodeRuntimeStateStore(input++);
+    :Acquire ObjectMetadataHandle;\nattach to FrameMetadata;
+    :Write ChannelRuntimeMeta(last_seen_vehicle based on pattern);
+    :Push to Queue2;
+    if (Queue2 full?) then (yes)
+      :Update NodeRuntimeStateStore(drop++);
+      :Release dropped pointer;
+    endif
+    :Update NodeRuntimeStateStore(output++);
+  repeat while (stop not requested)
+fork again
+  :Output thread loop;
+  repeat
+    :Pop from Queue2;
+    :Update NodeRuntimeStateStore(input++);
+    :Read ChannelRuntimeMeta;\nTTL check vehicle_present;
+    :Write outputs (image/meta);
+    :Release object -> buffer -> frame;
+    :Update NodeRuntimeStateStore(output++);
+  repeat while (stop not requested)
+end fork
+stop
+@enduml

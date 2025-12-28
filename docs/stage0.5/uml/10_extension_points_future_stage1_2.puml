@@ -1,0 +1,63 @@
+@startuml
+title Stage 0.5 Extension Points toward Stage 1 and Stage 2
+
+skinparam shadowing false
+skinparam componentStyle rectangle
+
+package "Stage 0.5" {
+  component Decode05 as "DecodeNode (synthetic)"
+  component Detect05 as "DummyDetectionNode"
+  component Output05 as "OutputNode"
+  component Meta05 as "ChannelRuntimeMetaStore"
+}
+
+package "Stage 1" {
+  component Input1 as "InputSourceNode"
+  component Decode1 as "DecodeNode (real)"
+  component Pre1 as "PreprocessNode"
+  component Infer1 as "InferAdaptor ORT"
+  component Post1 as "PostprocessNode"
+  component Output1 as "OutputNode"
+}
+
+package "Stage 2" {
+  component Pre2 as "GPU Preprocess"
+  component Infer2 as "InferAdaptor TRT"
+  component Cuda2 as "CUDA Context Pool"
+  component Output2 as "OutputNode"
+}
+
+Decode05 --> Detect05
+Detect05 --> Output05
+Detect05 --> Meta05
+Output05 --> Meta05
+
+Input1 --> Decode1
+Decode1 --> Pre1
+Pre1 --> Infer1
+Infer1 --> Post1
+Post1 --> Output1
+
+Pre1 --> Meta05
+Post1 --> Meta05
+
+Pre2 --> Infer2
+Infer2 --> Output2
+Cuda2 --> Infer2
+
+note right of Meta05
+Global runtime metadata shared across nodes.
+Stage 0.5 establishes the contract only.
+end note
+
+note bottom of Input1
+Stage 1 begins when a real input source
+is connected to the pipeline.
+end note
+
+note bottom of Infer2
+Stage 2 focuses on GPU residency,
+TensorRT, and CUDA execution control.
+end note
+
+@enduml

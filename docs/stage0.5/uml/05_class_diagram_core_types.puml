@@ -1,0 +1,88 @@
+@startuml
+title Stage 0.5 - Core Types and Ownership (Stores own memory; nodes hold handles/pointers)
+
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+
+class FrameMetadata {
+  +ChannelIdentifier channel_identifier
+  +uint64 frame_identifier
+  +FrameBufferHandle frame_buffer_handle
+  +vector<ObjectMetadataHandle> object_handles
+  +TimestampPair decode_ts
+  +TimestampPair detection_ts
+  +TimestampPair output_ts
+}
+
+class FrameBuffer
+class ObjectMetadata
+class TimestampPair {
+  +int64 wall_time_ns
+  +int64 monotonic_time_ns
+}
+
+class FrameMetadataStoreInterface {
+  +acquire() : FrameMetadata*
+  +release(FrameMetadata*) : void
+}
+class FrameBufferStoreInterface {
+  +acquire() : FrameBufferHandle
+  +release(FrameBufferHandle) : void
+}
+class ObjectMetadataStoreInterface {
+  +acquire() : ObjectMetadataHandle
+  +release(ObjectMetadataHandle) : void
+}
+
+class ChannelState {
+  +atomic<uint64> decoded_frame_count
+  +atomic<uint64> dropped_frame_count
+  +atomic<uint64> output_frame_count
+  +ChannelIdentifier channel_identifier
+}
+
+class ChannelRuntimeMeta {
+  +uint32 struct_version
+  +uint32 struct_size_bytes
+  +int64 last_seen_vehicle_monotonic_ns
+  +int64 last_seen_person_monotonic_ns
+  +int64 vehicle_presence_ttl_ns
+  +bool is_vehicle_present(now_ns) const
+  +int32 decode_fps_limit
+  +int32 detection_skip_frames
+}
+
+class ChannelRuntimeMetaStoreInterface {
+  +read(ChannelIdentifier, fn(const ChannelRuntimeMeta&)) : void
+  +write(ChannelIdentifier, fn(ChannelRuntimeMeta&)) : void
+}
+
+class NodeRuntimeState {
+  +atomic<uint64> input_count
+  +atomic<uint64> output_count
+  +atomic<uint64> dropped_count
+  +atomic<uint64> error_count
+}
+class NodeRuntimeStateStoreInterface {
+  +read(node_id, fn(const NodeRuntimeState&)) : void
+  +write(node_id, fn(NodeRuntimeState&)) : void
+}
+
+FrameMetadata --> TimestampPair
+FrameMetadataStoreInterface "1" o-- "many" FrameMetadata : owns
+FrameBufferStoreInterface "1" o-- "many" FrameBuffer : owns
+ObjectMetadataStoreInterface "1" o-- "many" ObjectMetadata : owns
+
+FrameMetadata --> FrameBufferStoreInterface : handle references
+FrameMetadata --> ObjectMetadataStoreInterface : handle references
+
+ChannelRuntimeMetaStoreInterface "1" o-- "many" ChannelRuntimeMeta : owns
+NodeRuntimeStateStoreInterface "1" o-- "many" NodeRuntimeState : owns
+
+note bottom of FrameMetadata
+Ownership rule:
+- FrameMetadataStore owns FrameMetadata memory.
+- Nodes pass pointers only.
+end note
+
+@enduml

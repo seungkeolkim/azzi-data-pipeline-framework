@@ -1,0 +1,35 @@
+@startuml
+title Stage 0.5 - NodeRuntimeStateStore Counters (node_instance_id scoped)
+
+hide footbox
+skinparam shadowing false
+
+participant "Any Node\n(Decode/Detect/Output)" as Node
+participant "NodeRuntimeStateStore" as Store
+participant "NodeRuntimeState" as State
+participant "Logger" as Logger
+
+Node -> Store : write(node_instance_id, callback)\n(in/out/drop/error++)
+activate Store
+Store -> State : get_or_create(node_instance_id)
+Store -> State : counters updated (atomic or under lock)
+deactivate Store
+
+Node -> Store : read(node_instance_id, callback)\n(optional snapshot)
+activate Store
+alt exists
+  Store -> State : find(node_instance_id)
+  Store --> Node : callback(const State&)
+  Node -> Logger : info(summary)\n(in/out/drop/error)
+else missing
+  Store --> Node : return (no callback)
+end
+deactivate Store
+
+note right of Store
+Rule:
+- Nodes must not own counters directly.
+- Other nodes may read this store to influence future behavior.
+end note
+
+@enduml

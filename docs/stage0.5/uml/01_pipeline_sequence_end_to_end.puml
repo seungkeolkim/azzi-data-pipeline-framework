@@ -1,0 +1,55 @@
+@startuml
+title Stage 0.5 - End-to-End Pipeline Sequence (Decode -> DummyDetection -> Output)
+
+hide footbox
+skinparam shadowing false
+
+participant "DecodeNode\n(thread)" as Decode
+participant "Queue1\n(BoundedPointerQueue)" as Q1
+participant "DummyDetectionNode\n(thread)" as Detect
+participant "Queue2\n(BoundedPointerQueue)" as Q2
+participant "OutputNode\n(thread)" as Output
+
+participant "FrameMetadataStore" as FrameStore
+participant "FrameBufferStore" as BufferStore
+participant "ObjectMetadataStore" as ObjectStore
+participant "ChannelRuntimeMetaStore" as MetaStore
+participant "NodeRuntimeStateStore" as NodeStateStore
+participant "ChannelState" as ChannelState
+
+== DecodeNode produces a frame ==
+Decode -> NodeStateStore : write(node_id)\ninput_count++
+Decode -> FrameStore : acquire FrameMetadata*
+Decode -> BufferStore : acquire FrameBufferHandle\n(fill synthetic frame)
+Decode -> ChannelState : decoded_frame_count++
+Decode -> Q1 : push(FrameMetadata*)
+alt Queue full (DropOldestItem)
+  Q1 --> Decode : dropped_old_pointer
+  Decode -> ChannelState : dropped_frame_count++
+  Decode -> FrameStore : release(dropped_old_pointer)\n(+ release chain if needed)
+end
+Decode -> NodeStateStore : write(node_id)\noutput_count++
+
+== DummyDetection attaches an object ==
+Detect -> Q1 : pop(FrameMetadata*)
+Detect -> NodeStateStore : write(node_id)\ninput_count++
+Detect -> ObjectStore : acquire ObjectMetadataHandle\n(create dummy bbox)
+Detect -> MetaStore : write(channel_id)\nupdate last_seen_vehicle (pattern)
+Detect -> Q2 : push(FrameMetadata*)
+alt Queue full (DropOldestItem)
+  Q2 --> Detect : dropped_old_pointer
+  Detect -> NodeStateStore : write(node_id)\ndropped_count++
+  Detect -> FrameStore : release(dropped_old_pointer)\n(+ release chain if needed)
+end
+Detect -> NodeStateStore : write(node_id)\noutput_count++
+
+== Output consumes and releases ==
+Output -> Q2 : pop(FrameMetadata*)
+Output -> NodeStateStore : write(node_id)\ninput_count++
+Output -> MetaStore : read(channel_id)\nvehicle_present = TTL(last_seen_vehicle)
+Output -> ObjectStore : release object handles
+Output -> BufferStore : release frame buffer handle
+Output -> FrameStore : release FrameMetadata*
+Output -> NodeStateStore : write(node_id)\noutput_count++
+
+@enduml

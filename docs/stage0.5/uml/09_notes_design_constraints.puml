@@ -1,0 +1,32 @@
+@startuml
+title Stage 0.5 - Design Constraints / Guardrails (Notes)
+
+skinparam shadowing false
+
+rectangle "Stage 0 / 0.5 Guardrails" {
+  note as N1
+  1) Store owns memory. Nodes hold handles/pointers only.
+  2) Queue contains pointers only. Overflow uses DropOldestItem.
+  3) OutputNode is the release chain terminator:
+     object -> buffer -> frame.
+  4) Stage 0.5 adds observability and global meta only.
+  5) Stage 1 starts when real RTSP ingest is connected to the pipeline input.
+  end note
+
+  note as N2
+  Naming/Comments policy:
+  - Avoid abbreviations for domain concepts.
+  - Write excessive comments.
+  - Assume "one month later, I am a different person".
+  end note
+
+  note as N3
+  Meta store policy:
+  - read(): find-only, no create (avoid hallucinated state).
+  - write(): create allowed.
+  - Callbacks under lock in Stage 0.5:
+    callbacks must be short; avoid store re-entry.
+  end note
+}
+
+@enduml

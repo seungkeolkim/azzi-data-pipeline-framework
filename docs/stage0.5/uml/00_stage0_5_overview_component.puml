@@ -1,0 +1,65 @@
+@startuml
+title Stage 0.5 - High-Level Component Overview (No RTSP ingest)
+
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+package "Executable" {
+  [main] as Main
+}
+
+package "Nodes (1 thread per node)" {
+  [DecodeNode] as Decode
+  [DummyDetectionNode] as Detect
+  [OutputNode] as Output
+}
+
+package "Queues (pointer only)" {
+  [BoundedPointerQueue<FrameMetadata*>] as Q1
+  [BoundedPointerQueue<FrameMetadata*>] as Q2
+}
+
+package "Stores (single owner; nodes hold handles/pointers only)" {
+  [FrameMetadataStore] as FrameStore
+  [FrameBufferStore] as BufferStore
+  [ObjectMetadataStore] as ObjectStore
+}
+
+package "Runtime / Observability" {
+  [ChannelState] as ChannelState
+  [ChannelRuntimeMetaStore\n(mutex backend; read=find-only; write=create)] as MetaStore
+  [NodeRuntimeStateStore\n(node_instance_id -> counters/state)] as NodeStateStore
+  [Logger] as Logger
+}
+
+Main --> Decode : construct & start thread\n(assign node_instance_id)
+Main --> Detect : construct & start thread\n(assign node_instance_id)
+Main --> Output : construct & start thread\n(assign node_instance_id)
+
+Decode --> Q1 : push FrameMetadata*
+Detect --> Q1 : pop FrameMetadata*
+Detect --> Q2 : push FrameMetadata*
+Output --> Q2 : pop FrameMetadata*
+
+Decode --> FrameStore : acquire/release
+Decode --> BufferStore : acquire/fill/release via handle
+Detect --> ObjectStore : acquire object meta\nattach handles into FrameMetadata
+Output --> ObjectStore : release objects\n(release chain start)
+Output --> BufferStore : release buffers
+Output --> FrameStore : release frame metadata\n(release chain end)
+
+Decode --> ChannelState : decoded/dropped counter
+Detect --> NodeStateStore : in/out/drop counters
+Output --> NodeStateStore : in/out counters\n(+ future: error/drop)
+Detect --> MetaStore : write(ChannelIdentifier)
+Output --> MetaStore : read(ChannelIdentifier)\nTTL presence check
+Logger <-- Decode
+Logger <-- Detect
+Logger <-- Output
+
+note right of Decode
+Stage 0.5: DecodeNode generates frames synthetically.
+Connecting real RTSP input is considered Stage 1.
+end note
+
+@enduml

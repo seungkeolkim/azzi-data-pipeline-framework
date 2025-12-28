@@ -1,0 +1,23 @@
+@startuml
+title Stage 0.5 - DropOldestItem Sequence (Pointer Queue Overflow)
+
+hide footbox
+skinparam shadowing false
+
+participant "Producer Node\n(e.g., DecodeNode)" as Producer
+participant "BoundedPointerQueue\nDropOldestItem policy" as Queue
+participant "FrameMetadataStore" as FrameStore
+participant "ChannelState" as ChannelState
+participant "Logger" as Logger
+
+Producer -> Queue : push(new_frame_ptr)
+alt Queue full
+  Queue --> Producer : dropped_old_pointer
+  Producer -> ChannelState : dropped_frame_count++
+  Producer -> Logger : warn(drop occurred)\n(include channel_id, frame_id)
+  Producer -> FrameStore : release(dropped_old_pointer)
+else Queue has capacity
+  Queue --> Producer : ok
+end
+
+@enduml

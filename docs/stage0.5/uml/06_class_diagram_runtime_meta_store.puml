@@ -1,0 +1,31 @@
+@startuml
+title Stage 0.5 - SimpleChannelRuntimeMetaStore (Mutex backend, read=find-only, write=create)
+
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+
+class SimpleChannelRuntimeMetaStore {
+  -mutex mutex_
+  -unordered_map<ChannelIdentifier, ChannelRuntimeMeta> meta_by_channel_
+  +read(channel_id, callback) : void
+  +write(channel_id, callback) : void
+  ..internal..
+  -find_unlocked_(channel_id) : ChannelRuntimeMeta*
+  -get_or_create_unlocked_(channel_id) : ChannelRuntimeMeta&
+}
+
+class ChannelRuntimeMeta
+
+SimpleChannelRuntimeMetaStore o-- ChannelRuntimeMeta
+
+note right of SimpleChannelRuntimeMetaStore
+Design decision (4.1):
+- read(): find-only (no create)
+- write(): create allowed
+
+Design point (4.2):
+- callbacks executed under lock in Stage 0.5
+- keep callbacks short; avoid store re-entry
+end note
+
+@enduml

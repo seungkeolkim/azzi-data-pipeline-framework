@@ -1,0 +1,30 @@
+@startuml
+title Stage 0.5 - FrameMetadata Lifecycle (Ownership + Release Chain)
+
+skinparam shadowing false
+
+[*] --> Allocated : FrameMetadataStore.acquire()
+
+Allocated --> Filled : Decode fills buffer\nand sets timestamps
+Filled --> Enqueued1 : push to Queue1
+Enqueued1 --> Dequeued1 : DummyDetection pop
+
+Dequeued1 --> Detected : ObjectMetadata handles attached\n+ detection timestamp set
+Detected --> Enqueued2 : push to Queue2
+Enqueued2 --> Dequeued2 : Output pop
+
+Dequeued2 --> OutputWritten : file/meta output written\n+ output timestamp set
+OutputWritten --> ReleasedObjects : ObjectMetadataStore.release(handles)
+ReleasedObjects --> ReleasedBuffer : FrameBufferStore.release(handle)
+ReleasedBuffer --> ReleasedFrame : FrameMetadataStore.release(ptr)
+ReleasedFrame --> [*]
+
+note right of Enqueued1
+Queue carries pointers only.\nDropOldest may drop the oldest pointer.
+end note
+
+note right of OutputWritten
+Release chain is explicit:\nobject -> buffer -> frame
+end note
+
+@enduml
