@@ -8,9 +8,16 @@ void SimpleChannelRuntimeMetaStore::read(ChannelIdentifier channel_identifier, c
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
-    const ChannelRuntimeMeta& meta = get_or_create_unlocked_(channel_identifier);
+    auto iterator = meta_by_channel_.find(channel_identifier);
+    if (iterator == meta_by_channel_.end()) {
+        // read는 절대 생성하지 않는다.
+        return;
+    }
+
+    const ChannelRuntimeMeta& meta = iterator->second;
     callback(meta);
 }
+
 
 void SimpleChannelRuntimeMetaStore::write(ChannelIdentifier channel_identifier, const WriteCallback& callback) {
     if (!callback) {

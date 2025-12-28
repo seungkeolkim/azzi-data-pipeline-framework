@@ -11,7 +11,9 @@ namespace stream_pipeline {
  * SimpleChannelRuntimeMetaStore
  * ------------------------------
  * - Stage 0.5용 mutex 기반 ChannelRuntimeMeta store.
- * - channel_identifier를 key로 하고, 없는 경우 default 값을 생성한다.
+ * - channel_identifier를 key로 사용한다.
+ * - read(): 기존 meta가 있을 때만 콜백 호출 (새 항목 생성 금지)
+ * - write(): 없는 경우 default 값을 생성하고 콜백에서 수정
  */
 class SimpleChannelRuntimeMetaStore final : public ChannelRuntimeMetaStoreInterface {
 public:
