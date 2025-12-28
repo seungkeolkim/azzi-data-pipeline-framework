@@ -21,9 +21,6 @@ else No drop
     Decode -> NodeStore : increment_out(channel_id)
 end
 
-note bottom of NodeStore
-Counters are per node_instance_id
-(not stored inside node objects)
-end note
+note bottom of NodeStore : Counters tracked by store per node_instance_id\nNode objects never own counters
 
 @enduml
