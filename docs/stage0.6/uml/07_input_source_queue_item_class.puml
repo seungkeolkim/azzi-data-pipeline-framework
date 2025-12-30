@@ -1,0 +1,21 @@
+@startuml
+' InputSourceQueueItem 구조
+
+class InputSourceQueueItem {
+  +ChannelIdentifier channel_identifier
+  +InputSourceDataBufferHandle buffer_handle
+  +size_t size_bytes
+  +uint64 sequence_number
+  +TimestampPair received_timestamp
+  +optional<int64> presentation_timestamp
+  +optional<int64> decoding_timestamp
+}
+
+class TimestampPair {
+  +int64 wall_clock_time_nanoseconds
+  +int64 monotonic_time_nanoseconds
+}
+
+InputSourceQueueItem --> TimestampPair
+
+@enduml

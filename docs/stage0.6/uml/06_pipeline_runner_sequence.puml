@@ -1,0 +1,28 @@
+@startuml
+' PipelineRunner 시작/정지 순서
+
+participant "PipelineRunner" as Runner
+participant "InputSourceQueue" as Q1
+participant "DecodeQueue" as Q2
+participant "DetectionQueue" as Q3
+participant "DummyInputSourceNode" as InputSource
+participant "DecodeNode" as Decode
+participant "DummyDetectionNode" as Detect
+participant "OutputNode" as Output
+
+== start_all_nodes ==
+Runner -> InputSource : start()
+Runner -> Decode : start()
+Runner -> Detect : start()
+Runner -> Output : start()
+
+== stop_all_nodes ==
+Runner -> Q1 : close()
+Runner -> Q2 : close()
+Runner -> Q3 : close()
+Runner -> InputSource : stop()
+Runner -> Decode : stop()
+Runner -> Detect : stop()
+Runner -> Output : stop()
+
+@enduml

@@ -1,0 +1,20 @@
+@startuml
+' Stage 0.6 DropOldestItem 정책 시퀀스
+
+participant Producer
+participant "BoundedPointerQueue" as Queue
+participant Consumer
+
+== 정상 삽입 ==
+Producer -> Queue : push(new_item)
+Queue --> Producer : Success
+
+== 가득 참 (DropOldestItem) ==
+Producer -> Queue : push(new_item)
+Queue -> Queue : pop_front()
+Queue -> Queue : push_back(new_item)
+Queue --> Producer : Success + dropped_old_pointer
+
+Producer -> Consumer : release(dropped_old_pointer)
+
+@enduml

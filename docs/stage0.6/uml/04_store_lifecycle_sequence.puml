@@ -1,0 +1,15 @@
+@startuml
+' 입력 소스 버퍼 스토어 수명
+
+participant "InputSourceNode" as InputSource
+participant "InputSourceDataBufferStore" as DataStore
+participant "DecodeNode" as Decode
+
+InputSource -> DataStore : acquire(size)
+DataStore --> InputSource : handle
+InputSource -> DataStore : view(handle)
+InputSource -> Decode : InputSourceQueueItem*(handle)
+
+Decode -> DataStore : release(handle)
+
+@enduml

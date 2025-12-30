@@ -1,0 +1,26 @@
+@startuml
+' 노드 인스턴스 = 스레드 1개
+
+skinparam shadowing false
+
+rectangle "Thread: InputSource" {
+  [DummyInputSourceNode]
+}
+
+rectangle "Thread: Decode" {
+  [DecodeNode]
+}
+
+rectangle "Thread: Detection" {
+  [DummyDetectionNode]
+}
+
+rectangle "Thread: Output" {
+  [OutputNode]
+}
+
+[DummyInputSourceNode] --> [DecodeNode]
+[DecodeNode] --> [DummyDetectionNode]
+[DummyDetectionNode] --> [OutputNode]
+
+@enduml

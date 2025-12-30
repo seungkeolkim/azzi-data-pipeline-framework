@@ -1,271 +1,219 @@
-# Stage 0.6 Kickoff README  
-(설계 결정사항 / 컨벤션 / 작업 범위 정리)
+# Stage 0.6 작업 체크리스트 & Codex 지시 프롬프트
+(Implementation Guide + Codex Instruction)
 
-> 목적  
-> Stage 0.5 완료 상태에서 Stage 0.6을 시작하기 위한 **설계 의도 / 개발 철학 / 결정사항 / 최소 구현 범위**를  
-> “한 달 뒤의 나는 남이다” 기준으로 복원한다.  
->  
-> 이 문서는 다음 채팅 세션, Codex, 혹은 다른 구현자에게 그대로 전달 가능한  
-> **설계 계약서 + 작업 지시서** 역할을 한다.
+## 목적
+Stage 0.6은 구조 전환의 핵심 단계다.
+이 문서는 실제 구현 작업을 시작하기 직전에 사용하는
+작업 체크리스트 + Codex 지시서 역할을 동시에 한다.
 
----
-
-## 0. Big Picture (상위 목표)
-
-우리가 만들고 싶은 것은 고정형 DeepStream 파이프라인이 아니라:
-
-- **동적으로 구성/교체 가능한 DAG 기반 Stream Pipeline Framework**
-- 입력은 영상(RTSP 등)에 국한되지 않는 **범용 스트림**
-  - TCP push
-  - REST push
-  - 센서 데이터
-  - 파일/기타 스트림
-- 장기적으로는 GUI 기반 drag-drop으로:
-  - 노드 추가/삭제/교체
-  - DAG 교체
-  - 채널별 서로 다른 DAG
-  - “과거 프레임/윈도우 상태가 미래 프레임 처리에 영향을 주는” 구조
-  를 지원한다.
-
-핵심은 데이터 자체가 아니라 **Meta 중심 설계**다.
-
-- FrameMetadata / FrameBuffer / ObjectMetadata
-- Channel 단위 Runtime Meta (TTL / time window)
-- Node 단위 Runtime State (counter / state)
+주의: 모든 주석은 반드시 한글로 작성한다.
+영어 주석이 섞이는 것은 금지한다.
 
 ---
 
-## 1. 개발 철학 / 컨벤션 (강한 합의)
-
-### 1.1 약자 사용 금지
-- 직접 만든 도메인 타입 / 클래스 / 변수명에 약자 사용 금지
-- 허용 예외:
-  - 표준 라이브러리 (`std`)
-- 의미가 F12 없이는 드러나지 않는 이름 금지
-
-### 1.2 주석은 과할 정도로
-- “한 달 뒤의 나는 남이다” 기준
-- 특히 아래 항목은 **코드 근처에 반드시 주석으로 남긴다**
-  - 소유권(ownership)
-  - 수명(lifecycle)
-  - lock 범위
-  - drop 정책
-  - stage 경계
-
-### 1.3 Store 단일 소유권 + zero-copy 전달 (절대 불변)
-- **Store가 메모리의 유일 소유자(single owner)**
-- 노드/큐는 handle/주소만 전달
-- Stage 0.6에서도 이 원칙은 절대 깨지면 안 된다  
-  (임시 vector 복사 등 금지)
-
-### 1.4 Drop 정책
-- Queue overflow 시 **DropOldestItem**
-- drop은 파이프라인 중단 없이 해당 아이템만 유실
-- sink 실패도 전체 시스템 중단 없이 drop 처리
-
-### 1.5 파이프라인 비종료 원칙
-- Release 빌드에서는 **어떤 이유로도 파이프라인 종료 금지**
-- Debug 전용 assert는 Release 빌드에서 제거되어야 함
+## 0. 절대 불변 전제 (Stage 0.6 전체 공통)
+- Release 빌드에서 파이프라인은 어떤 이유로도 종료되면 안 된다
+- 디버깅 목적의 assert는 Debug 빌드에서만 존재
+- Release 빌드에서는 assert 제거
+- Store 단일 소유권 + zero-copy 전달
+- Store가 메모리의 유일 소유자
+- Node / Queue는 handle 또는 주소만 전달
+- std::vector 복사 전달 금지 (Store 내부 구현으로만 허용)
+- Queue overflow 시 DropOldestItem
+- Stage 1/2의 기능을 Stage 0.6에 억지로 넣지 않는다
 
 ---
 
-## 2. Stage 0.5 현재 상태 요약
+## 1. Stage 0.6 작업 범위 요약
+### Stage 0.6에서 반드시 할 것
+- InputSourceNode / DecodeNode 물리적 분리
+- Pull / Push 입력을 모두 수용하는 InputSource 추상화 뼈대
+- zero-copy 전달을 위한 신규 Store 생성
+- Payload 타입(InputSourceQueueItem) 고정
+- Thread 모델 유지 (node instance 1개 = thread 1개)
 
-구현 완료:
-- ChannelRuntimeMeta (+ TTL)
-- ChannelRuntimeMetaStore (mutex backend, read=find-only)
-- NodeRuntimeStateStore
-- DummyDetection → meta write
-- Output → meta read + TTL 기반 로그 출력
-
-누락(절반 달성 평가 이유):
-- DecodeNode 내부에 InputSource 책임이 섞여 있음
-- InputSource / Decode 구조 분리 미구현
-
----
-
-## 3. Stage 0.6 목표 및 범위 (확정)
-
-### 3.1 Stage 0.6의 목적
-Stage 0.6은 성능 단계가 아니라 **구조 분리 단계**다.
-
-- InputSourceNode / DecodeNode **구조적 분리**
-- Pull / Push 입력을 모두 수용 가능한 **InputSource 추상화 뼈대**
-- HW decode / NVDEC / DeviceMemory 확장을 고려한 **노드 분리 기반 확보**
-- zero-copy / Store 단일 소유권 원칙을 Stage 0.6에서도 유지
-
-### 3.2 Stage 0.6 Non-Goals (하지 않는 것)
-- 실제 RTSP ingest 구현
-- 실제 decode 구현 (FFmpeg / GStreamer / NVDEC)
-- 고급 queue empty 처리 정책
-- PTS/DTS 기반 time sync
-- 동적 thread/instance 증감 구현
+### Stage 0.6에서 하지 않는 것
+- 실제 RTSP ingest
+- 실제 decode (FFmpeg / GStreamer / NVDEC)
+- 고급 queue empty 처리
+- PTS/DTS 정책 적용
+- 동적 thread/instance 증감
 
 ---
 
-## 4. 핵심 설계 결정사항 (Checkpoint)
+## 2. 파일 / 클래스 단위 작업 체크리스트
+### 2.1 신규 Store: InputSourceDataBufferStore
+목적
+- InputSource에서 생성되는 raw / encoded 데이터를 담는 전용 Store
+- 기존 FrameBufferStore는 decode 완료 프레임 전용이므로 사용 금지
 
-### 4.1 Node / Thread 모델
-- 기본 원칙: **node instance 1개당 thread 1개**
-- Stage 0.6에서:
-  - InputSourceNode = 독립 thread
-  - DecodeNode = 독립 thread
-- 이유:
-  - HW decode / device memory 최적화 대비
-  - 장기적으로 InputSource → MemMove → Decode 삽입 가능성 확보
+구현 체크리스트
+- 파일 위치 예시
+  - stores/input_source_data_buffer_store.h
+  - stores/input_source_data_buffer_store.cpp
+- Store가 메모리의 유일 소유자
+- 외부로는 handle 기반 view만 제공
 
-> 동적 instance/thread 증감은 장기 목표로 유지  
-> Stage 0.6에서는 구조적 여지만 남긴다
+API (Stage 0.6 고정)
+- Acquire(size_bytes)
+- View(handle) -> pointer + size
+- Release(handle)
+- HostMemory만 지원 (DeviceMemory는 TODO 주석)
 
----
+필수 한글 주석 (강제)
+- "zero-copy 전달은 절대 불변 원칙"
+- "향후 DeviceMemory / NVDEC / DMA 확장 가능"
+- "이 Store는 InputSource 전용이며 decode 완료 프레임용이 아님"
 
-### 4.2 InputSource는 Pull / Push 모두 지원
+### 2.2 Payload 타입: InputSourceQueueItem
+목적
+- InputSource -> Decode 사이를 흐르는 큐 아이템
+- 현재는 raw byte chunk
+- 미래에는 frame / access unit으로 승격 가능
+
+구현 체크리스트
+- PascalCase: InputSourceQueueItem
+- 포함 정보
+  - channel_identifier
+  - buffer_handle (InputSourceDataBufferStore)
+  - size_bytes
+  - sequence_number
+  - TimestampPair (wall / monotonic)
+  - PTS/DTS 필드 (optional, 비어 있음)
+- bytes를 직접 소유하지 않음
+
+필수 한글 주석
+- "현재 구현은 raw byte chunk"
+- "frame/access unit 승격 가능성 TODO"
+- "하나의 frame이 여러 queue slot에 걸칠 수 있음"
+
+### 2.3 InputSource 카테고리 Base Node
+목적
+- 다양한 입력 방식(Pull / Push)을 수용하는 추상 기반 클래스
+- Stage 0.6에서는 dummy 구현 허용
+
+핵심 설계
+- InputSourceMode
+  - Pull
+  - Push
 - Pull:
-  - node 내부 thread에서 poll/read
+  - 내부 thread 루프에서 poll/read
 - Push:
-  - 외부 경계에서 데이터 주입
-  - TCP socket 기반 push 가능
-  - REST push 가능
-- Stage 0.6에서는 dummy 구현 가능하나,
-  - Base class 설계에 Pull/Push 모드가 반드시 존재해야 함
-  - InputSourceMode(Pull | Push)를 멤버로 가짐
-  - 외부 경계 호출을 전제로 thread-safety 주석 필수
+  - 외부 경계(TCP socket / REST 등)에서 호출 가능
+  - thread-safe 진입점 필요
+
+구현 체크리스트
+- Base class 생성
+- 실제 입력 구현 없음 (dummy OK)
+- 멤버로 InputSourceMode 보유
+- 상태 조회 accessor 제공
+  - IDLE / ERROR / DISCONNECTED 등
+- try/catch로 예외를 잡고 pipeline 비종료 유지
+
+필수 한글 주석 (매우 중요)
+- "외부 TCP/REST push 가능성을 전제로 설계"
+- "Push 모드는 외부 경계에서 호출될 수 있음"
+- "Stage 0.6에서는 구현하지 않지만 반드시 이 구조를 유지해야 함"
+- "한 달 뒤의 나는 남이다 - 절대 구조를 합치지 말 것"
+
+### 2.4 DecodeNode 분리
+목적
+- InputSource 책임과 decode 책임을 물리적으로 분리
+- HW decode / device memory 확장을 위한 기반 확보
+
+구현 체크리스트
+- DecodeNode는 독립 thread
+- 입력은 InputSourceQueueItem
+- Stage 0.6에서는 stub decode 허용
+- FrameMetadata / FrameBuffer 생성은 기존 계약 유지
+
+필수 한글 주석
+- "InputSource와 Decode는 반드시 분리"
+- "향후 MemMoveNode 삽입 가능성"
+- "NVDEC / DeviceMemory 대응 구조"
+
+### 2.5 Thread / Queue 연결 구조
+고정 구조
+- InputSourceNode (thread)
+  -> Queue<InputSourceQueueItem>
+    -> DecodeNode (thread)
+      -> Queue<FrameMetadata/FrameBuffer>
+        -> Detection
+        -> Output
+
+구현 원칙
+- node instance 1개 = thread 1개
+- queue는 포인터/handle만 전달
+- DropOldestItem 정책 유지
 
 ---
 
-### 4.3 에러 처리 골조
-- 다양한 에러 발생 가능 (disconnect, timeout, parse error 등)
-- Stage 0.6 목표:
-  - try/catch 기반 비종료 골조
-  - 노드 상태 조회 가능한 accessor 제공
-- queue empty 처리 정책은 Stage 1 이후로 이관
+## 3. Stage 0.6 완료 조건 (Definition of Done)
+- InputSourceNode / DecodeNode가 서로 다른 thread로 동작
+- InputSourceDataBufferStore 생성 및 사용
+- InputSourceQueueItem을 통한 전달 동작
+- Dummy InputSource에서도 파이프라인이 정상 동작
+- 예외 발생 시에도 파이프라인이 종료되지 않음
+- 모든 신규 코드에 한글 주석이 충분히 포함됨
 
 ---
 
-### 4.4 InputSource → Decode 데이터 단위
-- 장기 목표:
-  - EncodedVideoFrame / AccessUnit
-- 현실 제약:
-  - TCP stream에서 frame 경계 불명확한 경우 존재
-- Stage 0.6 결정:
-  - **raw byte chunk로 구현 고정**
-  - TODO 주석으로:
-    - frame/access unit 승격
-    - 하나의 frame이 여러 queue slot을 차지할 수 있음
-    명시
+## 4. Codex 지시 프롬프트 (그대로 복사해서 사용)
+아래 텍스트를 Codex에 그대로 붙여 넣어 사용한다.
+
+```text
+Codex Prompt
+
+당신은 C++ 기반 데이터 파이프라인 프레임워크의 Stage 0.6 구현을 맡는다.
+아래 조건을 절대적으로 지켜라.
+
+공통 규칙
+
+모든 주석은 반드시 한글
+영어 주석 금지
+
+약자 사용 금지 (표준 라이브러리 제외)
+
+한 달 뒤의 개발자가 처음 보는 코드라고 가정하고 설명 주석을 과하게 작성
+
+설계 전제
+
+Release 빌드에서 파이프라인은 어떤 이유로도 종료되면 안 된다
+
+Debug 전용 assert는 Release에서 제거
+
+Store 단일 소유권 + zero-copy(handle 전달) 절대 유지
+
+구현 범위
+
+InputSourceNode / DecodeNode 구조 분리
+
+Pull / Push 입력을 모두 지원하는 InputSource Base class
+
+신규 Store: InputSourceDataBufferStore
+
+Acquire(size_bytes) API
+
+Payload 타입: InputSourceQueueItem
+
+실제 RTSP / decode 구현은 하지 않는다
+
+Stage 1/2 기능은 절대 추가하지 않는다
+
+구현 스타일
+
+구조적 확장을 강하게 의식한 설계
+
+Dummy 구현이라도 인터페이스와 주석은 최종 형태를 전제로 작성
+
+"나중에 고치자"가 아니라 "지금은 이렇게 고정한다"를 주석으로 명시
+```
 
 ---
 
-### 4.5 Payload 타입 이름
-- InputSource → Decode 큐 아이템 타입:
-  - **`InputSourceQueueItem` (PascalCase)**
-- 구현 디테일에 묶이지 않는 중립적 이름
-
----
-
-### 4.6 미디어 타임스탬프
-- PTS/DTS 필드는 Stage 0.6에서 **존재만**
-- 실제 사용은 Stage 1에서 처리
-
----
-
-### 4.7 신규 Store 생성
-- 기존 `FrameBufferStore`:
-  - decode 완료 프레임 전용
-- encoded/raw 입력용 Store는 별도 필요
-- 신규 Store 이름:
-  - **`InputSourceDataBufferStore`**
-
----
-
-### 4.8 InputSourceDataBufferStore API
-- Stage 0.6에서는 단순안 채택
-  - **Acquire(size_bytes)**
-- DeviceMemory / NVDEC 연계는 Stage 1/2에서 확장
-- 확장 가능성은 주석으로 명시
-
----
-
-## 5. 강제 주석 지침 (미래 확장용)
-
-Stage 0.6에서는 모든 노드를 제너릭하게 완성하지 않는다.  
-대신 반드시 다음 내용을 **코드 주석으로 강하게 남긴다**.
-
-### 5.1 노드 분류(Category)
-장기적으로 노드는 다음 대분류를 가진다:
-
-- InputSource
-- Decode
-- MemMove
-- UserLogic
-- Output
-- Etc
-
-각 Category는:
-- 공통 Base class (Origin class)
-- 다양한 파생 구현 노드
-
----
-
-### 5.2 포트 / 계약 기반 연결
-- GUI drag-drop 연결은 “이름”이 아니라 **입출력 계약**으로 판단
-- 같은 interface, 다른 동작의 노드 조합 가능해야 함
-- zero-copy / handle 전달 원칙은 모든 Category에 공통 적용
-
----
-
-## 6. Stage 0.6 성공 기준 (관측)
-
-### 최소 로그 기준
-1. Thread lifecycle
-   - `[InputSourceNode] started / stopped`
-   - `[DecodeNode] started / stopped`
-
-2. 상태 관측
-   - InputSourceNode 상태(IDLE / ERROR 등) 조회 가능
-
-3. 에러 주입 테스트
-   - DummyInputSource에서 예외 발생
-   - catch 후 상태/카운터 갱신
-   - 파이프라인 지속 동작
-
----
-
-## 7. Stage 0.6 구현 가이드 요약
-
-- InputSource Base class
-  - Pull / Push 모드 지원
-  - 외부 경계 호출 전제
-  - 상태 accessor 제공
-
-- DecodeNode 분리
-  - InputSourceQueueItem 입력 처리
-  - stub 구현 허용
-
-- 신규 Store
-  - InputSourceDataBufferStore
-  - zero-copy / handle 전달
-  - Acquire(size_bytes)
-
-- Payload
-  - InputSourceQueueItem
-  - buffer store handle만 보유
-  - raw byte chunk 기반
-  - 미래 frame/access unit TODO 명시
-
----
-
-## 8. 핵심 요약 문장 (다음 채팅/코덱스 전달용)
-
-Stage 0.6은 실제 RTSP/decode 구현 단계가 아니라  
-InputSourceNode와 DecodeNode의 구조적 분리와  
-Pull/Push 입력을 모두 수용하는 InputSource 추상화 뼈대를 만드는 단계다.  
-
-모든 데이터 전달은 Store 단일 소유권 기반(handle/주소 기반) zero-copy를 절대 유지한다.  
-InputSourceQueueItem은 raw byte chunk 구현으로 고정하되  
-미래 frame/access unit 승격을 위한 TODO를 강하게 남긴다.  
-
-encoded/raw 입력을 위해 InputSourceDataBufferStore를 신규 생성하고  
-Acquire(size_bytes)로 단순 시작한다.  
-
-Release 빌드에서 파이프라인은 어떤 이유로도 종료되면 안 된다.
+## 5. 마지막 확인
+이 문서는 다음 용도로 그대로 사용 가능하다.
+- Stage 0.6 시작 전 README
+- Codex 입력 프롬프트
+- 다음 ChatGPT 세션 컨텍스트
+- 설계 의사결정 증빙 문서

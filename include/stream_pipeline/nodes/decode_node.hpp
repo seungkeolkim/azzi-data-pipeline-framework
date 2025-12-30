@@ -3,8 +3,10 @@
 #include "stream_pipeline/concurrency/bounded_pointer_queue.hpp"
 #include "stream_pipeline/metadata/channel_state.hpp"
 #include "stream_pipeline/metadata/frame_metadata_store_interface.hpp"
+#include "stream_pipeline/metadata/input_source_queue_item.hpp"
 #include "stream_pipeline/metadata/node_runtime_state_store_interface.hpp"
 #include "stream_pipeline/memory/frame_buffer_store_interface.hpp"
+#include "stream_pipeline/memory/input_source_data_buffer_store_interface.hpp"
 #include "stream_pipeline/runtime/node_interface.hpp"
 
 #include <atomic>
@@ -14,18 +16,15 @@
 namespace stream_pipeline {
 
 /*
- * DecodeNode (Stage 0)
- * -------------------
- * - Stage 0에서는 InputSourceNode를 분리하지 않고,
- *   DecodeNode 내부에서 “입력 획득 + decode(또는 stub) + enqueue”까지 수행한다.
+ * 디코드 노드
+ * -----------
+ * - 입력 소스 노드와 물리적으로 분리된 디코드 전용 노드다.
+ * - 입력은 입력 소스 큐 아이템이며, 출력은 프레임 메타데이터다.
  *
- * 중요:
- * - Stage 1에서 InputSourceNode를 분리할 예정이다.
- * - 따라서 DecodeNode는 “나중에 입력부를 뽑아낼 수 있게” 구현을 과도하게 엮지 않는다.
- *
- * Stage 0 단순화:
- * - 실제 RTSP decode 대신, Synthetic frame(더미 프레임)을 생성한다.
- * - 목표는 E2E 파이프라인 완주 및 메타/큐/스토어 계약 검증이다.
+ * 필수 구조 원칙:
+ * - 입력 소스와 디코드는 반드시 분리한다.
+ * - 향후 메모리 이동 노드 삽입 가능성을 남긴다.
+ * - 하드웨어 디코더와 장치 메모리 대응 구조를 유지한다.
  */
 class DecodeNode final : public NodeInterface {
 public:
@@ -33,21 +32,20 @@ public:
         std::int32_t frame_width{640};
         std::int32_t frame_height{360};
 
-        // Stage 0: RGB24로 단순화
+        // 0.6 단계 단순화: 픽셀 포맷을 하나로 고정
         PixelFormat pixel_format{PixelFormat::RGB24};
 
-        // decode 단계에서의 throttling (N프레임 중 1 프레임)
+        // 디코드 단계에서의 샘플링 비율
         std::int32_t process_every_n_frames{1};
-
-        // synthetic source frame rate (sleep 기반, 정확한 realtime 동기화는 Stage 0 범위 밖)
-        std::int32_t synthetic_frames_per_second{15};
     };
 
     DecodeNode(
         ChannelState& channel_state,
         FrameMetadataStoreInterface& frame_metadata_store,
         FrameBufferStoreInterface& frame_buffer_store,
+        InputSourceDataBufferStoreInterface& input_source_data_buffer_store,
         NodeRuntimeStateStoreInterface& node_runtime_state_store,
+        BoundedPointerQueue<InputSourceQueueItem*>& input_queue,
         BoundedPointerQueue<FrameMetadata*>& frame_metadata_queue,
         QueueOverflowPolicy overflow_policy,
         const Configuration& configuration);
@@ -61,6 +59,7 @@ public:
 
 private:
     void thread_entry_();
+    void release_input_item_(InputSourceQueueItem* item_pointer);
 
     void fill_synthetic_rgb24_frame_(
         std::uint8_t* rgb_data_pointer,
@@ -72,7 +71,9 @@ private:
     ChannelState& channel_state_;
     FrameMetadataStoreInterface& frame_metadata_store_;
     FrameBufferStoreInterface& frame_buffer_store_;
+    InputSourceDataBufferStoreInterface& input_source_data_buffer_store_;
     NodeRuntimeStateStoreInterface& node_runtime_state_store_;
+    BoundedPointerQueue<InputSourceQueueItem*>& input_queue_;
     BoundedPointerQueue<FrameMetadata*>& frame_metadata_queue_;
 
     QueueOverflowPolicy overflow_policy_;
@@ -85,4 +86,4 @@ private:
     std::thread worker_thread_;
 };
 
-}  // namespace stream_pipeline
+}

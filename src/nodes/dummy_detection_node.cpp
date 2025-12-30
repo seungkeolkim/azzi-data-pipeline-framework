@@ -25,7 +25,7 @@ DummyDetectionNode::DummyDetectionNode(
       input_queue_(input_queue),
       output_queue_(output_queue),
       configuration_(configuration) {
-    node_instance_identifier_ = 2;  // Stage 0.5: 정적 인스턴스 ID
+    node_instance_identifier_ = 3;
 }
 
 DummyDetectionNode::~DummyDetectionNode() {
@@ -54,9 +54,9 @@ void DummyDetectionNode::stop() {
 
     stop_requested_.store(true);
 
-    // input_queue_가 blocking pop이므로, 종료를 원활하게 하려면 close가 필요하다.
-    // 이 close 책임은 상위 runner에서 수행하는 것이 더 명확하다.
-    // 여기서는 join만 수행한다.
+    // 입력 큐가 블로킹 팝이므로, 종료를 원활하게 하려면 닫기가 필요하다.
+    // 이 닫기 책임은 상위 실행 관리자에서 수행하는 것이 더 명확하다.
+    // 여기서는 조인만 수행한다.
     if (worker_thread_.joinable()) {
         worker_thread_.join();
     }
@@ -81,27 +81,27 @@ void DummyDetectionNode::thread_entry_() {
             state.input_count.fetch_add(1);
         });
 
-        // dropped 프레임이라면, Stage 0에서는 그대로 다음으로 넘기지 않고
-        // OutputNode에서 정리하도록 하는 편이 단순하다.
-        // 다만 Stage 0에서는 drop이 대부분 DecodeNode에서 정리되어 release 되었을 가능성이 높다.
+        // 드롭된 프레임이라면, 0 단계에서는 그대로 다음으로 넘기지 않고
+        // 출력 노드에서 정리하도록 하는 편이 단순하다.
+        // 다만 0 단계에서는 드롭이 대부분 디코드 노드에서 정리되어 해제되었을 가능성이 높다.
         if (frame_metadata_pointer->dropped) {
-            // 그래도 흐름을 유지하기 위해 output_queue로 전달한다(정리 책임을 OutputNode로 일원화).
+            // 그래도 흐름을 유지하기 위해 출력 큐로 전달한다(정리 책임을 출력 노드로 일원화).
             output_queue_.push(frame_metadata_pointer);
             continue;
         }
 
-        // frame 크기를 알기 위해 buffer view를 얻는다.
+        // 프레임 크기를 알기 위해 버퍼 뷰를 얻는다.
         FrameBufferView view{};
         if (!frame_buffer_store_.view(frame_metadata_pointer->frame_buffer_handle, view) ||
             view.width <= 0 || view.height <= 0) {
 
-            // view 실패 시: detection을 생략하고 output으로 넘긴다.
-            // (Stage 0 정책: 실패는 해당 프레임 기능만 drop, 파이프라인은 계속)
+            // 뷰 실패 시: 탐지를 생략하고 출력으로 넘긴다.
+            // (0 단계 정책: 실패는 해당 프레임 기능만 드롭, 파이프라인은 계속)
             output_queue_.push(frame_metadata_pointer);
             continue;
         }
 
-        // 중앙 고정 bbox 1개 생성
+        // 중앙 고정 바운딩 박스 1개 생성
         const float bbox_width = static_cast<float>(view.width) * configuration_.bbox_width_ratio;
         const float bbox_height = static_cast<float>(view.height) * configuration_.bbox_height_ratio;
 
@@ -109,13 +109,13 @@ void DummyDetectionNode::thread_entry_() {
         const float top = (static_cast<float>(view.height) - bbox_height) * 0.5f;
 
         ObjectMetadata object_metadata{};
-        object_metadata.object_identifier = static_cast<ObjectIdentifier>(frame_metadata_pointer->frame_identifier);  // Stage0: 임시 매핑
+        object_metadata.object_identifier = static_cast<ObjectIdentifier>(frame_metadata_pointer->frame_identifier);  // 0 단계: 임시 매핑
         object_metadata.class_identifier = configuration_.class_identifier;
         object_metadata.confidence_score = configuration_.confidence_score;
         object_metadata.bounding_box = BoundingBox{left, top, bbox_width, bbox_height};
         object_metadata.tracking_identifier = -1;
 
-        // store에 등록하고 handle을 frame에 attach
+        // 스토어에 등록하고 핸들을 프레임에 붙인다
         auto create_outcome = object_metadata_store_.create(object_metadata);
         if (create_outcome.result == ObjectMetadataStoreInterface::CreateResult::Success &&
             create_outcome.object_handle != 0) {
@@ -123,11 +123,11 @@ void DummyDetectionNode::thread_entry_() {
             frame_metadata_pointer->object_handles.push_back(create_outcome.object_handle);
         }
 
-        // stage timestamp 기록
+        // 탐지 완료 시각 기록
         const TimestampPair detection_timestamp = now_timestamp_pair();
         frame_metadata_pointer->detection_completed_timestamp = detection_timestamp;
 
-        // ChannelRuntimeMeta 업데이트(간단한 패턴으로 vehicle 관측 기록)
+        // 채널 런타임 메타 업데이트(간단한 패턴으로 차량 관측 기록)
         const bool vehicle_observed = (frame_metadata_pointer->frame_identifier % 2ULL) == 0ULL;
         if (vehicle_observed) {
             channel_runtime_meta_store_.write(channel_state_.channel_identifier, [&](ChannelRuntimeMeta& meta) {
@@ -181,4 +181,4 @@ void DummyDetectionNode::thread_entry_() {
     }
 }
 
-}  // namespace stream_pipeline
+}

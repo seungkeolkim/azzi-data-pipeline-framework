@@ -17,19 +17,19 @@
 namespace stream_pipeline {
 
 /*
- * OutputNode (Stage 0)
- * -------------------
- * - 입력: FrameMetadata* (DummyDetectionNode가 전달)
+ * 출력 노드
+ * ---------
+ * - 입력: 프레임 메타데이터 포인터(더미 탐지 노드가 전달)
  * - 처리:
- *   1) ObjectMetadataStore에서 object_handle들을 read하여 JSONL 출력
- *   2) FrameBufferStore view로 버퍼를 얻어 PPM(옵션) 저장 + 간단 overlay(옵션)
- *   3) release chain 수행:
- *      - object_metadata_store.release(object_handle...)
- *      - frame_buffer_store.release(frame_buffer_handle)
- *      - frame_metadata_store.release(frame_metadata_pointer)
+ *   1) 객체 메타데이터 스토어에서 객체 핸들을 읽어 줄 단위 제이슨 출력
+ *   2) 프레임 버퍼 뷰로 버퍼를 얻어 피피엠 저장 + 간단 오버레이 처리
+ *   3) 해제 체인 수행:
+ *      - 객체 메타데이터 해제
+ *      - 프레임 버퍼 해제
+ *      - 프레임 메타데이터 해제
  *
  * 합의:
- * - Sink 실패 시 drop. 즉, 파일 쓰기 실패가 파이프라인 중단을 유발하면 안 된다.
+ * - 출력 실패 시 드롭 처리한다. 파일 쓰기 실패가 파이프라인 중단을 유발하면 안 된다.
  */
 class OutputNode final : public NodeInterface {
 public:
@@ -37,11 +37,11 @@ public:
         std::string output_directory_path{"output"};
         std::string jsonl_file_name{"frames.jsonl"};
 
-        // 이미지 출력 옵션 (PPM)
+        // 이미지 출력 옵션(피피엠)
         bool enable_ppm_output{true};
         std::int32_t write_image_every_n_frames{5};
 
-        // overlay 옵션(아주 단순한 사각형 테두리)
+        // 오버레이 옵션(아주 단순한 사각형 테두리)
         bool enable_bbox_overlay{true};
     };
 
@@ -93,4 +93,4 @@ private:
     std::thread worker_thread_;
 };
 
-}  // namespace stream_pipeline
+}

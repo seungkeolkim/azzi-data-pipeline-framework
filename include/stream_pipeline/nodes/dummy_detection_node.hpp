@@ -15,24 +15,24 @@
 namespace stream_pipeline {
 
 /*
- * DummyDetectionNode (Stage 0)
- * ----------------------------
- * - 입력: FrameMetadata* (DecodeNode가 생성하여 큐로 전달)
- * - 처리: 프레임마다 중앙 고정 bbox 1개 생성
- * - 출력: 같은 FrameMetadata*를 다음 큐로 전달
+ * 더미 탐지 노드
+ * -------------
+ * - 입력: 프레임 메타데이터 포인터(디코드 노드가 생성하여 큐로 전달)
+ * - 처리: 프레임마다 중앙 고정 바운딩 박스 1개 생성
+ * - 출력: 같은 프레임 메타데이터 포인터를 다음 큐로 전달
  *
  * 합의:
- * - Dummy라도 정식 ObjectMetadata 계약을 사용한다.
- * - 결과는 ObjectMetadataStoreInterface에 create하고, FrameMetadata에는 object_handle만 attach한다.
+ * - 더미라도 정식 객체 메타데이터 계약을 사용한다.
+ * - 결과는 객체 메타데이터 스토어에 생성하고, 프레임 메타데이터에는 객체 핸들만 붙인다.
  */
 class DummyDetectionNode final : public NodeInterface {
 public:
     struct Configuration {
-        // bbox 크기 비율 (0~1 사이 권장)
+        // 바운딩 박스 크기 비율 (0~1 사이 권장)
         float bbox_width_ratio{0.3f};
         float bbox_height_ratio{0.3f};
 
-        // 고정 class_id 및 confidence
+        // 고정 클래스 식별자 및 신뢰도
         std::int32_t class_identifier{0};
         float confidence_score{1.0f};
     };
@@ -76,4 +76,4 @@ private:
     std::thread worker_thread_;
 };
 
-}  // namespace stream_pipeline
+}

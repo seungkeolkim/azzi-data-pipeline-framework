@@ -1,0 +1,33 @@
+@startuml
+' Stage 0.6 입력 소스 -> 디코드 시퀀스
+
+actor External as External
+participant "DummyInputSourceNode" as InputSource
+participant "InputSourceDataBufferStore" as DataStore
+participant "Queue<InputSourceQueueItem>" as InputQueue
+participant "DecodeNode" as Decode
+participant "FrameMetadataStore" as FrameMetaStore
+participant "FrameBufferStore" as FrameBufferStore
+participant "Queue<FrameMetadata*>" as DecodeQueue
+
+== Pull 모드 ==
+InputSource -> DataStore : acquire(size_bytes)
+DataStore --> InputSource : buffer_handle
+InputSource -> DataStore : view(handle)
+InputSource -> InputQueue : push(InputSourceQueueItem*)
+
+Decode -> InputQueue : pop_blocking()
+InputQueue --> Decode : InputSourceQueueItem*
+Decode -> FrameMetaStore : acquire(channel)
+Decode -> FrameBufferStore : acquire(description)
+Decode -> FrameBufferStore : view(handle)
+Decode -> DecodeQueue : push(FrameMetadata*)
+Decode -> DataStore : release(buffer_handle)
+
+== Push 모드 (외부 진입점) ==
+External -> InputSource : push_from_external(bytes)
+InputSource -> DataStore : acquire(size_bytes)
+InputSource -> DataStore : view(handle)
+InputSource -> InputQueue : push(InputSourceQueueItem*)
+
+@enduml

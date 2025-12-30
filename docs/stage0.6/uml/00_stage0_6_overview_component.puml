@@ -1,0 +1,45 @@
+@startuml
+' Stage 0.6 구성 개요
+
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+package "Stage 0.6 Pipeline" {
+  [InputSourceNode] as InputSource
+  [DecodeNode] as Decode
+  [DummyDetectionNode] as Detect
+  [OutputNode] as Output
+
+  queue "Queue<InputSourceQueueItem>" as Q1
+  queue "Queue<FrameMetadata*>" as Q2
+  queue "Queue<FrameMetadata*>" as Q3
+
+  InputSource --> Q1 : InputSourceQueueItem*
+  Q1 --> Decode : InputSourceQueueItem*
+  Decode --> Q2 : FrameMetadata*
+  Q2 --> Detect : FrameMetadata*
+  Detect --> Q3 : FrameMetadata*
+  Q3 --> Output : FrameMetadata*
+}
+
+package "Stores" {
+  [InputSourceDataBufferStore]
+  [FrameMetadataStore]
+  [FrameBufferStore]
+  [ObjectMetadataStore]
+  [ChannelRuntimeMetaStore]
+  [NodeRuntimeStateStore]
+}
+
+InputSource ..> InputSourceDataBufferStore : acquire/view/release
+Decode ..> InputSourceDataBufferStore : release
+Decode ..> FrameMetadataStore : acquire/release
+Decode ..> FrameBufferStore : acquire/view/release
+Detect ..> ObjectMetadataStore : create/release
+Detect ..> ChannelRuntimeMetaStore : write/read
+Output ..> FrameMetadataStore : release
+Output ..> FrameBufferStore : release
+Output ..> ObjectMetadataStore : release
+Output ..> ChannelRuntimeMetaStore : read
+
+@enduml

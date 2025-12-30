@@ -27,7 +27,7 @@ OutputNode::OutputNode(
       node_runtime_state_store_(node_runtime_state_store),
       input_queue_(input_queue),
       configuration_(configuration) {
-    node_instance_identifier_ = 3;  // Stage 0.5: 정적 인스턴스 ID
+    node_instance_identifier_ = 4;
 }
 
 OutputNode::~OutputNode() {
@@ -63,15 +63,15 @@ void OutputNode::stop() {
 }
 
 void OutputNode::thread_entry_() {
-    // output 디렉터리 준비
+    // 출력 디렉터리 준비
     ensure_directory_exists(configuration_.output_directory_path);
 
     const std::string jsonl_path =
         (std::filesystem::path(configuration_.output_directory_path) / configuration_.jsonl_file_name).string();
 
     std::ofstream jsonl_stream(jsonl_path, std::ios::out | std::ios::app);
-    // jsonl_stream이 실패하더라도 파이프라인을 멈추면 안 된다.
-    // 아래에서는 jsonl_stream.good()를 체크하며 실패 시 기록만 스킵한다.
+    // 출력 스트림이 실패하더라도 파이프라인을 멈추면 안 된다.
+    // 아래에서는 스트림 상태를 확인하며 실패 시 기록만 생략한다.
 
     while (!stop_requested_.load()) {
         auto pop_outcome = input_queue_.pop_blocking();
@@ -88,7 +88,7 @@ void OutputNode::thread_entry_() {
             state.input_count.fetch_add(1);
         });
 
-        // 1) object handles -> object metadata 읽기
+        // 1) 객체 핸들로 객체 메타데이터 읽기
         std::vector<ObjectMetadata> objects;
         objects.reserve(frame_metadata_pointer->object_handles.size());
 
@@ -99,7 +99,7 @@ void OutputNode::thread_entry_() {
             }
         }
 
-        // 2) JSONL 기록
+        // 2) 줄 단위 제이슨 기록
         if (jsonl_stream.good()) {
             write_jsonl_record_(jsonl_stream, *frame_metadata_pointer, objects);
             jsonl_stream.flush();
@@ -121,7 +121,7 @@ void OutputNode::thread_entry_() {
                     : "vehicle not observed within TTL window");
         }
 
-        // 3) 이미지 출력(옵션)
+        // 3) 이미지 출력(선택)
         FrameBufferView view{};
         const bool can_view = frame_buffer_store_.view(frame_metadata_pointer->frame_buffer_handle, view) &&
                               view.data_pointer != nullptr &&
@@ -130,7 +130,7 @@ void OutputNode::thread_entry_() {
         if (configuration_.enable_ppm_output && can_view) {
             const int n = (configuration_.write_image_every_n_frames <= 0) ? 1 : configuration_.write_image_every_n_frames;
             if ((frame_metadata_pointer->frame_identifier % static_cast<std::uint64_t>(n)) == 0ULL) {
-                // overlay(옵션)
+                // 오버레이(선택)
                 if (configuration_.enable_bbox_overlay) {
                     for (const auto& object : objects) {
                         overlay_bounding_box_rgb24_(
@@ -148,7 +148,7 @@ void OutputNode::thread_entry_() {
                 const std::string ppm_path =
                     (std::filesystem::path(configuration_.output_directory_path) / file_name_stream.str()).string();
 
-                // 파일 쓰기 실패는 drop (즉, 파이프라인 중단 금지)
+                // 파일 쓰기 실패는 드롭 처리(즉, 파이프라인 중단 금지)
                 write_ppm_rgb24(
                     ppm_path,
                     static_cast<const std::uint8_t*>(view.data_pointer),
@@ -157,7 +157,7 @@ void OutputNode::thread_entry_() {
             }
         }
 
-        // 4) output timestamp 기록
+        // 4) 출력 타임스탬프 기록
         frame_metadata_pointer->output_completed_timestamp = output_timestamp;
         channel_state_.output_frame_count.fetch_add(1);
 
@@ -165,18 +165,18 @@ void OutputNode::thread_entry_() {
             state.output_count.fetch_add(1);
         });
 
-        // 5) release chain (Stage 0에서 가장 중요)
-        // 5-1) objects release
+        // 5) 해제 체인(0 단계에서 가장 중요)
+        // 5-1) 객체 해제
         for (const ObjectHandle object_handle : frame_metadata_pointer->object_handles) {
             object_metadata_store_.release(object_handle);
         }
         frame_metadata_pointer->object_handles.clear();
 
-        // 5-2) frame buffer release
+        // 5-2) 프레임 버퍼 해제
         frame_buffer_store_.release(frame_metadata_pointer->frame_buffer_handle);
         frame_metadata_pointer->frame_buffer_handle = 0;
 
-        // 5-3) frame metadata release
+        // 5-3) 프레임 메타데이터 해제
         frame_metadata_store_.release(frame_metadata_pointer);
     }
 }
@@ -188,9 +188,9 @@ void OutputNode::overlay_bounding_box_rgb24_(
     std::int32_t stride_bytes,
     const BoundingBox& bounding_box) {
 
-    // 매우 단순한 overlay:
+    // 매우 단순한 오버레이:
     // - 사각형 테두리만 그린다.
-    // - 색은 고정(예: 빨강). Stage 0에서는 가독성 우선.
+    // - 색은 고정(예: 빨강). 0 단계에서는 가독성 우선.
 
     if (rgb_data_pointer == nullptr) {
         return;
@@ -204,18 +204,18 @@ void OutputNode::overlay_bounding_box_rgb24_(
     auto set_pixel = [&](int x, int y) {
         std::uint8_t* row = rgb_data_pointer + y * stride_bytes;
         std::uint8_t* pixel = row + x * 3;
-        pixel[0] = 255;  // R
-        pixel[1] = 0;    // G
-        pixel[2] = 0;    // B
+        pixel[0] = 255;  // 빨강
+        pixel[1] = 0;    // 초록
+        pixel[2] = 0;    // 파랑
     };
 
-    // top/bottom lines
+    // 상단과 하단 선
     for (int x = left; x <= right; ++x) {
         set_pixel(x, top);
         set_pixel(x, bottom);
     }
 
-    // left/right lines
+    // 좌측과 우측 선
     for (int y = top; y <= bottom; ++y) {
         set_pixel(left, y);
         set_pixel(right, y);
@@ -227,14 +227,14 @@ void OutputNode::write_jsonl_record_(
     const FrameMetadata& frame_metadata,
     const std::vector<ObjectMetadata>& objects) {
 
-    // Stage 0 JSONL 스키마(간단):
-    // - channel_identifier
-    // - frame_identifier
-    // - timestamps (decode/detection/output wall+monotonic)
-    // - objects: [{class_identifier, confidence_score, bbox{l,t,w,h}}...]
+    // 0 단계 줄 단위 제이슨 스키마(간단):
+    // - 채널 식별자
+    // - 프레임 식별자
+    // - 타임스탬프(디코드, 탐지, 출력의 벽시계와 단조 시각)
+    // - 객체 목록: [{클래스 식별자, 신뢰도, 박스{좌,상,폭,높}}...]
 
-    // JSON을 수동으로 조립한다(외부 JSON 라이브러리 회피).
-    // 운영용으로는 escaping/precision 등을 정교하게 해야 하지만 Stage 0에서는 단순화한다.
+    // 제이슨 문자열을 수동으로 조립한다(외부 라이브러리 회피).
+    // 운영용으로는 이스케이프 처리와 정밀도 등을 정교하게 해야 하지만 0 단계에서는 단순화한다.
 
     jsonl_stream << "{";
     jsonl_stream << "\"channel_identifier\":" << frame_metadata.channel_identifier << ",";
@@ -276,4 +276,4 @@ void OutputNode::write_jsonl_record_(
     jsonl_stream << "}\n";
 }
 
-}  // namespace stream_pipeline
+}

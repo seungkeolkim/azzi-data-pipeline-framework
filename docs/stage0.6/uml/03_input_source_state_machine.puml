@@ -1,0 +1,13 @@
+@startuml
+' InputSource 상태 머신
+
+[*] --> Idle
+Idle --> Running : start()
+Running --> Error : exception
+Running --> Disconnected : 외부 경계 단절
+Disconnected --> Running : 재연결 성공
+Running --> Stopped : stop()
+Idle --> Stopped : stop()
+Error --> Stopped : stop()
+
+@enduml

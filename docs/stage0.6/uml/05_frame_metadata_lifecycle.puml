@@ -1,0 +1,23 @@
+@startuml
+' FrameMetadata 수명 흐름
+
+participant "DecodeNode" as Decode
+participant "FrameMetadataStore" as FrameStore
+participant "FrameBufferStore" as BufferStore
+participant "DummyDetectionNode" as Detect
+participant "ObjectMetadataStore" as ObjectStore
+participant "OutputNode" as Output
+
+Decode -> FrameStore : acquire(channel)
+Decode -> BufferStore : acquire(description)
+Decode -> BufferStore : view(handle)
+Decode -> Detect : FrameMetadata*
+
+Detect -> ObjectStore : create(object)
+Detect -> Output : FrameMetadata*
+
+Output -> ObjectStore : release(object_handle...)
+Output -> BufferStore : release(frame_buffer_handle)
+Output -> FrameStore : release(frame_metadata)
+
+@enduml
